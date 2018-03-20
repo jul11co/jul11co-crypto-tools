@@ -1,0 +1,761 @@
+<html>
+  <head>
+    <title><%=title%> | Crypto File Browser</title>
+
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+
+    <link rel="stylesheet" href="/css/bootstrap.min.css">
+    <link rel="stylesheet" href="/css/bootstrap-theme.min.css">
+    <link rel="stylesheet" href="/css/font-awesome.min.css">
+    <link rel="stylesheet" href="/css/animate.css">
+    
+    <script src="/js/jquery-3.2.1.min.js"></script>
+    <script src="/js/bootstrap.min.js"></script>
+
+    <style type="text/css">
+      table#items tr.item-folder {
+        cursor: pointer;
+      }
+      table#items tr.item-file {
+        cursor: pointer;
+      }
+      .item-file-extra {
+        font-size: 12px;
+        color: grey;
+        margin-bottom: 0;
+        padding-left:21px;
+      }
+      .icon-invisible {
+        visibility: hidden;
+      }
+      .modal-dialog {
+        margin: 5px auto;
+        width: calc(100% - 105px);
+      }
+      .modal-content {
+        border: 1px solid black;
+        border-radius: 0;
+      }
+      @media (max-width: 768px) {
+        .modal-dialog {
+          /*width: calc(100% - 15px);*/
+          margin: 0px auto;
+          width: 100%;
+        }
+      }
+      .modal-header {
+        padding: 5px 15px;
+      }
+      #file-preview-body {
+        padding: 0;
+        background: black;
+      }
+      .file-preview-button {
+        color: rgb(170, 170, 170);
+      }
+      .file-preview-button:hover,
+      .file-preview-button:active,
+      .file-preview-button:focus {
+        color: white;
+      }
+      #file-preview-header {
+        position: absolute;
+        text-align: center;
+        margin-bottom: 0;
+        width: 100%;
+        color: white;
+        /*background-color: rgba(128, 128, 128, 0.35);*/
+        background-color: transparent;
+        z-index: 3001;
+      }
+      #file-preview-file-info {
+        position: absolute;
+        left: 10px;
+      }
+      #file-preview-close {
+        position: absolute;
+        top: 3px;
+        right: 3px;
+      }
+      #file-preview-size-toggle {
+        position: absolute;
+        top: 3px;
+        right: 28px;
+      }
+      #file-preview-size-toggle a {
+        text-decoration: none;
+      }
+      #file-preview-close a {
+        text-decoration: none;
+      }
+      #file-preview-title-container {
+        position: absolute;
+        text-align: center;
+        width: 100%;
+        bottom: 50px;
+        z-index: 3001;
+      }
+      #file-preview-title {
+        color: white;
+        background-color: rgba(49, 49, 49, 0.68);
+        border-radius: 4px;
+        padding: 3px 10px;
+      }
+      #file-preview-content {
+        position: relative;
+        text-align: center;
+        display: block;
+        margin: 0 auto;
+        height: 100%;
+        overflow-y: scroll;
+      }
+      #file-preview-content img.fit {
+        max-width: 100%;
+        max-height: 100%;
+      }
+      #file-preview-content img.fit-width {
+        max-width: 100%;
+      }
+      #file-preview-content img.fit-height {
+        max-height: 100%;
+      }
+      #file-preview-content img.max {
+        max-width: none;
+        max-height: none;
+      }
+      #file-preview-content img.extra {
+        display: block;
+        margin: 5px auto;
+        min-height: 50px;
+      }
+      #file-preview-content video {
+        max-width: 100%;
+        max-height: 100%;
+        margin-top: 20px;
+      }
+      #file-preview-left {
+        position: absolute;
+        top: 0;
+        left: 0;
+        width: 20%;
+        height: 90%;
+        z-index: 3000;
+        cursor: pointer;
+      }
+      #file-preview-right {
+        position: absolute;
+        top: 0;
+        right: 0;
+        width: 20%;
+        height: 90%;
+        z-index: 3000;
+        cursor: pointer;
+      }
+      @media (max-width: 768px) {
+        #file-preview-left,
+        #file-preview-right {
+          width: 40px;
+        }
+      }
+    </style>
+  </head>
+  <body>
+
+    <div class="container">
+
+    <div class="row">
+      <div id="browser-main" class="col-md-12">
+
+        <h3>
+          <a href="/">Crypto File Browser</a> 
+        </h3>
+
+        <p>
+          <a href="/?files=1"><b>Files</b> (<%=files_count%>)</a>, 
+          <a href="/?images=1"><b>Images</b> (<%=images_count%>)</a>, 
+          <a href="/?videos=1"><b>Videos</b> (<%=videos_count%>)</a> 
+        </p>
+        <p>
+          File Types: 
+          <%for(var i=0; i < popular_file_types.length; i++){%>
+          <a href="/?file_type=<%=popular_file_types[i].type%>"><span style="text-transform: lowercase;"><%=popular_file_types[i].type%></span> (<%=popular_file_types[i].count%>)</a><%if (i < popular_file_types.length-1){%>,<%}%>
+          <%}%>
+        </p>
+
+        <%if (query.images) {%>
+        <h3>All Images</h3>
+        <%}else if (query.videos) {%>
+        <h3>All Videos</h3>
+        <%}else if (query.files) {%>
+        <h3>All Files</h3>
+        <%} else {%>
+        <nav aria-label="breadcrumb" role="navigation">
+          <ol class="breadcrumb">
+            <li class="breadcrumb-item"><a href="/"><i class="fa fa-home fa-fw"></i></a></li>
+          <%parents.forEach(function(parent){%>
+            <li class="breadcrumb-item"><a href="/?dir=<%=encodeURIComponent(parent.path)%>"><%=parent.name%></a></li>
+          <%});%>
+            <li class="breadcrumb-item"><%=dir_name%></li>
+          </ol>
+        </nav>
+        <%}%>
+
+        <%
+        var base_comp = 'dir=' + encodeURIComponent(dir_path);
+        if (query.images){
+          base_comp = 'images=1';
+        } else if (query.videos) {
+          base_comp = 'videos=1';
+        } else if (query.files) {
+          base_comp = 'files=1';
+        } else if (query.file_type) {
+          base_comp = 'file_type=' + query.file_type;
+        }
+        %>
+        
+        <div style="height: 40px;">
+          <div class="dropdown hidden-lg hidden-md" style="float: right;">
+            <button class="btn btn-default dropdown-toggle" type="button" data-toggle="dropdown">
+              <%if (!query.sort||query.sort=='name'){%>Name <%if(query.order=='desc'){%>&darr;<%}else{%>&uarr;<%}%> <span class="caret"></span><%}%>
+              <%if (query.sort=='size'){%>Size <%if(query.order=='asc'){%>&uarr;<%}else{%>&darr;<%}%> <span class="caret"></span><%}%>
+              <%if (query.sort=='type'){%>Type <%if(query.order=='desc'){%>&darr;<%}else{%>&uarr;<%}%> <span class="caret"></span><%}%>
+              <%if (query.sort=='mtime'){%>Date Modified <%if(query.order=='asc'){%>&uarr;<%}else{%>&darr;<%}%> <span class="caret"></span><%}%>
+            </button>
+            <ul class="dropdown-menu dropdown-menu-right">
+              <%if (!query.sort||query.sort=='name'){%>
+                <%if(query.order=='desc'){%>
+              <li class="active"><a href="/?<%=base_comp%>&sort=name">Name</a></li>
+                <%}else{%>
+              <li class="active"><a href="/?<%=base_comp%>&sort=name&order=desc">Name</a></li>
+                <%}%>
+              <%}else{%>
+              <li><a href="/?<%=base_comp%>&sort=name&order=desc">Name</a></li>
+              <%}%>
+              <%if (query.sort=='size'){%>
+                <%if(query.order=='asc'){%>
+              <li class="active"><a href="/?<%=base_comp%>&sort=size">Size</a></li>
+                <%}else{%>
+              <li class="active"><a href="/?<%=base_comp%>&sort=size&order=asc">Size</a></li>
+                <%}%>
+              <%}else{%>
+              <li><a href="/?<%=base_comp%>&sort=size">Size</a></li>
+              <%}%>
+              <%if (query.sort=='type'){%>
+                <%if(query.order=='desc'){%>
+              <li class="active"><a href="/?<%=base_comp%>&sort=type">Type</a></li>
+                <%}else{%>
+              <li class="active"><a href="/?<%=base_comp%>&sort=type&order=desc">Type</a></li>
+                <%}%>
+              <%}else{%>
+              <li><a href="/?<%=base_comp%>&sort=type&order=desc">Type</a></li>
+              <%}%>
+              <%if (query.sort=='mtime'){%>
+                <%if(query.order=='asc'){%>
+              <li class="active"><a href="/?<%=base_comp%>&sort=mtime">Date Modified</a></li>
+                <%}else{%>
+              <li class="active"><a href="/?<%=base_comp%>&sort=mtime&order=asc">Date Modified</a></li>
+                <%}%>
+              <%}else{%>
+              <li><a href="/?<%=base_comp%>&sort=mtime">Date Modified</a></li>
+              <%}%>
+            </ul>
+          </div>
+          <h5>
+            <%if (dirs.length>1){%><span><%=dirs.length%> folders</span><%}else if (dirs.length==1){%><span><%=dirs.length%> folder</span><%}%><%if (dirs.length>0&&files_length>0){%><span>, </span><%}%><%if (files_length>1){%><span><%=files_length%> files</span><%}else if (files_length==1){%><span>1 file</span><%}%>
+            <%if (total_size>0){%> - <%=bytes(total_size)%><%}%>
+          </h5>
+        </div>
+
+        <%var query_skip = (query.skip ? parseInt(query.skip) : 0);%>
+        <%var next_skip = query_skip+1000;%>
+
+        <%if (files_length>next_skip){%>
+        <p><%=(query_skip+1)%>-<%=(next_skip)%>, <a href="/?<%=base_comp%>&skip=<%=next_skip%>">and more <%=(files_length-next_skip)%> files...</a></p>
+        <%}else if (query_skip>0){%>
+        <p><%=(query_skip+1)%>-<%=files_length%></p>
+        <%}%>
+
+        <div style="overflow-x:auto;">
+        <table id="items" class="table table-hover table-responsive" style="font-size: 14px;">
+          <thead class="hidden-xs hidden-sm">
+            <tr>
+              <th>
+                <%if (!query.sort||query.sort=='name'){%>
+                  <%if(query.order=='desc'){%>
+                <a href="/?<%=base_comp%>&sort=name">Name</a>
+                <i class="fa fa-angle-down fa-fw" style="color: grey;"></i>
+                  <%}else{%>
+                <a href="/?<%=base_comp%>&sort=name&order=desc">Name</a>
+                <i class="fa fa-angle-up fa-fw" style="color: grey;"></i>
+                  <%}%>
+                <%}else{%>
+                <a href="/?<%=base_comp%>&sort=name&order=desc">Name</a>
+                <%}%>
+              </th>
+              <th></th>
+              <th>
+                <%if (query.sort=='size'){%>
+                  <%if(query.order=='asc'){%>
+                <a href="/?<%=base_comp%>&sort=size">Size</a>
+                <i class="fa fa-angle-up fa-fw" style="color: grey;"></i>
+                  <%}else{%>
+                <a href="/?<%=base_comp%>&sort=size&order=asc">Size</a>
+                <i class="fa fa-angle-down fa-fw" style="color: grey;"></i>
+                  <%}%>
+                <%}else{%>
+                <a href="/?<%=base_comp%>&sort=size">Size</a>
+                <%}%>
+              </th>
+              <th>
+                <%if (query.sort=='type'){%>
+                  <%if(query.order=='desc'){%>
+                <a href="/?<%=base_comp%>&sort=type">Type</a>
+                <i class="fa fa-angle-down fa-fw" style="color: grey;"></i>
+                  <%}else{%>
+                <a href="/?<%=base_comp%>&sort=type&order=desc">Type</a>
+                <i class="fa fa-angle-up fa-fw" style="color: grey;"></i>
+                  <%}%>
+                <%}else{%>
+                <a href="/?<%=base_comp%>&sort=type&order=desc">Type</a>
+                <%}%>
+              </th>
+              <th>
+                <%if (query.sort=='mtime'){%>
+                  <%if(query.order=='asc'){%>
+                <a href="/?<%=base_comp%>&sort=mtime">Date Modified</a>
+                <i class="fa fa-angle-up fa-fw" style="color: grey;"></i>
+                  <%}else{%>
+                <a href="/?<%=base_comp%>&sort=mtime&order=asc">Date Modified</a>
+                <i class="fa fa-angle-down fa-fw" style="color: grey;"></i>
+                  <%}%>
+                <%}else{%>
+                <a href="/?<%=base_comp%>&sort=mtime">Date Modified</a>
+                <%}%>
+              </th>
+            </tr>
+          </thead>
+          <tbody>
+
+          <%dirs.forEach(function(dir){%>
+            <tr class="item-folder" data-path="<%=encodeURIComponent(dir.path)%>">
+              <td>
+                <a style="color: black;" href="/?dir=<%=encodeURIComponent(dir.path)%>"><i class="fa fa-folder fa-fw" style="color: #5bc0de;"></i></a> <%=ellipsisMiddle(dir.name,80)%> 
+                <p class="item-file-extra">
+                  <%if (dir.subdirs_count>1){%><span><%=dir.subdirs_count%> folders</span><%}else if (dir.subdirs_count==1){%>
+                  <span>1 folder</span><%}%><%if (dir.subdirs_count>0&&dir.files_count>0){%><span>,</span> <%}%>
+                  <%if (dir.files_count>1){%>
+                  <span><%=dir.files_count%> files</span>
+                  <%}else if (dir.files_count==1){%>
+                  <span>1 file</span>
+                  <%}%>
+                </p>
+                <p class="item-file-extra hidden-lg hidden-md">
+                  <%if (dir.size>0){%><span><%=bytes(dir.size)%></span><%}%>
+                </p>
+                <p class="item-file-extra hidden-lg hidden-md"><%if (dir.mtime){%><%=moment(dir.mtime).format('MMM DD, YYYY hh:mm A')%><%}%></p>
+              </td>
+              <td class="hidden-xs hidden-sm">
+                <!-- <a class="open-in-external-program" href="#" data-path="<%=encodeURIComponent(dir.path)%>" title="Open in external program"><i class="fa fa-external-link fa-fw"></i></a> -->
+              </td>
+              <td class="hidden-sm hidden-xs" style="color: grey;">
+                <%if (dir.size>0){%><span><%=bytes(dir.size)%></span><%}%>
+              </td>
+              <td class="hidden-xs hidden-sm" style="color: grey;">Folder</td>
+              <td class="hidden-xs hidden-sm" style="color: grey;"><%if (dir.mtime){%><%=moment(dir.mtime).format('MMM DD, YYYY hh:mm A')%><%}%></td>
+            </tr>
+          <%})%>
+
+          <%files.forEach(function(file, idx){%>
+            <tr class="item-file item-file-<%=file.type%>" data-file-name="<%=file.name%>" 
+              data-file-link="/files/<%=file.name%>?path=<%=encodeURIComponent(file.relpath)%>"
+              data-file-path="<%=encodeURIComponent(file.relpath)%>"
+              data-file-size="<%=bytes(file.size)%>"
+              data-file-type="<%=file.type%>"
+              title="<%=file.name%>">
+              <td>
+                <a id="<%=file.name%>"></a>
+                <a style="color: grey;" class="open-external-link" href="/files/<%=file.name%>?path=<%=encodeURIComponent(file.relpath)%>" target="_blank" title="Open file in new tab"><i class="fa fa-file fa-fw" style="color: grey;"></i></a> <%=ellipsisMiddle(file.name,60)%> 
+                <%if (query.images||query.videos||query.files||query.file_type){%>
+                <p class="item-file-extra"><a class="open-external-link" href="/?dir=<%=encodeURIComponent(path.dirname(file.relpath))%>#<%=file.name%>" title="Show in folder"><%=ellipsisMiddle(path.basename(path.dirname(file.relpath)),80)%></a></p>
+                <%}%> 
+                <p class="item-file-extra hidden-lg hidden-md"><%if (file.mtime){%><span style="margin-right: 15px;"><%=moment(file.mtime).format('MMM DD, YYYY hh:mm A')%><%}%></span> <span><%=bytes(file.size)%></span>  </p>
+              </td>
+              <td class="hidden-xs hidden-sm">
+                <a class="open-in-external-program hidden" href="#" data-path="<%=encodeURIComponent(file.relpath)%>" title="Open in external program"><i class="fa fa-external-link fa-fw"></i></a>
+              </td>
+              <td class="hidden-xs hidden-sm" style="color: grey;"><%=bytes(file.size)%></td>
+              <td class="hidden-xs hidden-sm" style="color: grey;"><span style="text-transform: uppercase;"><%=file.type%></span> File</td>
+              <td class="hidden-xs hidden-sm" style="color: grey;"><%if (file.mtime){%><%=moment(file.mtime).format('MMM DD, YYYY hh:mm A')%><%}%></td>
+            </tr>
+          <%})%>
+
+          </tbody>
+        </table>
+        </div>
+
+        <%if (files_length>next_skip){%>
+        <p><a href="/?<%=base_comp%>&skip=<%=next_skip%>">and more <%=(files_length-next_skip)%> files...</a></p>
+        <%}%>
+
+      </div><!-- browser-main -->
+
+    </div><!-- row -->
+
+    <!-- Modal -->
+    <div id="previewModal" class="modal fade" role="dialog">
+      <div class="modal-dialog">
+
+        <!-- Modal content-->
+        <div class="modal-content">
+
+          <div class="modal-header hidden">
+            <button type="button" class="close" data-dismiss="modal">&times;</button>
+            <h4 class="modal-title"></h4>
+          </div>
+
+          <div class="modal-body" id="file-preview-body">
+            <p id="file-preview-header">
+              <span id="file-preview-file-info"></span>
+
+              <a href="#" id="file-preview-prev" class="file-preview-button"
+                title="Preview previous file (left)"><i class="fa fa-chevron-left fa-fw"></i></a>
+              <span id="file-preview-subtitle"></span>
+              <a href="#" id="file-preview-next" class="file-preview-button"
+                title="Preview next file (right)"><i class="fa fa-chevron-right fa-fw"></i></a>
+
+              <span id="file-preview-size-toggle"><a href="#" class="file-preview-button"
+                title="Toggle preview image size (s)"><i class="fa fa-arrows fa-fw"></i></a></span>
+              <span id="file-preview-close" tile><a href="#" class="file-preview-button"
+                title="Close preview (esc)"><i class="fa fa-times fa-fw"></i></a></span>
+            </p>
+            
+            <div id="file-preview-title-container">
+              <span id="file-preview-title"></span>
+            </div>
+            
+            <div id="file-preview-content">
+            </div>
+
+            <div id="file-preview-left"></div>
+            <div id="file-preview-right"></div>
+
+          </div>
+
+        </div>
+
+      </div>
+    </div><!-- modal -->
+
+    </div><!-- container -->
+
+  <script type="text/javascript">
+    $(document).ready(function() {
+
+      // console.log('Window height: ' + $( window ).height());
+
+      $('.open-external-link').on('click', function(event) {
+        event.stopPropagation();
+      });
+
+      $('.open-in-external-program').on('click', function(event) {
+        event.stopPropagation();
+        event.preventDefault();
+
+        var open_path = $(this).attr('data-path');
+        if (open_path && open_path != '') {
+          $.getJSON('/open?path=' + open_path, function(resp) {
+            // console.log(resp);
+            if (resp && resp.error) {
+              console.log(resp.error);
+            }
+          });
+        }
+      });
+
+      /* File Preview */
+
+      var is_previewing = false;
+      var current_index = -1;
+
+      var previewable_files_count = 0;
+      var previewable_files_index_map = {};
+
+      var file_preview_image_size = 'fit'; // 'fit', 'fit-width', 'fit-height', 'max'
+
+      var isImageFile = function($item) {
+        return $item.hasClass('item-file-jpg') || $item.hasClass('item-file-png')
+            || $item.hasClass('item-file-gif') || $item.hasClass('item-file-jpeg');
+      }
+      var isVideoFile = function($item) {
+        return $item.hasClass('item-file-mp4') || $item.hasClass('item-file-webm');
+      }
+      var isMp4VideoFile = function($item) {
+        return $item.hasClass('item-file-mp4');
+      }
+      var isWebMVideoFile = function($item) {
+        return $item.hasClass('item-file-webm');
+      }
+
+      var getCurrentPreviewItem = function() {
+        return $('table#items tbody tr').eq(current_index);
+      }
+
+      var getNextPreviewItem = function() {
+
+        var next_index = current_index+1;
+        // console.log('Index:', next_index);
+
+        if (next_index >= $('table#items tbody tr').length) {
+          return null;
+        }
+
+        current_index = next_index;
+
+        var $item = $('table#items tbody tr').eq(current_index);
+        if ($item) {
+          if (isImageFile($item) || isVideoFile($item)) {
+            return $item;
+          } else {
+            return getNextPreviewItem();
+          }
+        } else {
+          return getNextPreviewItem();
+        }
+      }
+
+      var getPrevPreviewItem = function() {
+
+        if (current_index == 0) {
+          return null;
+        }
+
+        current_index = current_index-1;
+        // console.log('Index:', current_index);
+
+        var $item = $('table#items tbody tr').eq(current_index);
+        if ($item) {
+          if (isImageFile($item) || isVideoFile($item)) {
+            return $item;
+          } else {
+            return getPrevPreviewItem();
+          }
+        } else {
+          return getPrevPreviewItem();
+        }
+      }
+
+      var previewItem = function($item) {
+        if ($item) {
+          if (isImageFile($item)) {
+            var file_link = $item.attr('data-file-link');
+            // console.log('Preview:', file_link);
+
+            $('#file-preview-title').text($item.attr('data-file-name'));
+            $('#file-preview-file-info').text($item.attr('data-file-type').toUpperCase() 
+              + ' - ' + $item.attr('data-file-size'));
+            
+            var index = previewable_files_index_map[$item.index()];
+            $('#file-preview-subtitle').text('' + (index+1) + ' of ' + previewable_files_count);
+
+            $('#file-preview-content').html(
+              '<span style="display: inline-block;height: 100%;vertical-align: middle;"></span>' +
+              '<img src="' + file_link + '" class="fadeIn animated ' + (file_preview_image_size||'fit') + '">'
+            );
+            $("#previewModal").modal('show');
+            
+            $("<img/>").on('load', function(){
+              var file_info = $('#file-preview-file-info').text();
+              file_info += ' - W:' + this.width + ' x H:' + this.height;
+              $('#file-preview-file-info').text(file_info);
+            }).attr("src", file_link);
+
+           } else if (isMp4VideoFile($item)) {
+            var file_path = $item.attr('data-file-path');
+            // console.log('Preview:', file_path);
+
+            $('#file-preview-title').text($item.attr('data-file-name'));
+            $('#file-preview-file-info').text($item.attr('data-file-type').toUpperCase() 
+              + ' - ' + $item.attr('data-file-size'));
+            var index = previewable_files_index_map[$item.index()];
+            $('#file-preview-subtitle').text('' + (index+1) + ' of ' + previewable_files_count);
+            $('#file-preview-content').html(
+              '<span style="display: inline-block;height: 100%;vertical-align: middle;"></span>' +
+              '<video width="100%" height="95%" controls="controls" autoplay>' +
+                '<source src="/video/?path=' + file_path + '" type="video/mp4" />' +
+              '</video>'
+            );
+            $("#previewModal").modal('show');
+          } else if (isWebMVideoFile($item)) {
+            var file_path = $item.attr('data-file-path');
+            // console.log('Preview:', file_path);
+
+            $('#file-preview-title').text($item.attr('data-file-name'));
+            $('#file-preview-file-info').text($item.attr('data-file-type').toUpperCase() 
+              + ' - ' + $item.attr('data-file-size'));
+            var index = previewable_files_index_map[$item.index()];
+            $('#file-preview-subtitle').text('' + (index+1) + ' of ' + previewable_files_count);
+            $('#file-preview-content').html(
+              '<span style="display: inline-block;height: 100%;vertical-align: middle;"></span>' +
+              '<video width="100%" height="95%" controls="controls" autoplay>' +
+                '<source src="/video/?path=' + file_path + '" type="video/webm" />' +
+              '</video>'
+            );
+            $("#previewModal").modal('show');
+          } 
+        }
+      }
+
+      var previewNextItem = function() {
+        var $item = getNextPreviewItem();
+        if ($item) {
+          $('table#items tbody tr').removeClass('info');
+          $item.addClass('info');
+          previewItem($item);
+        }
+      }
+
+      var previewPrevItem = function() {
+        var $item = getPrevPreviewItem();
+        if ($item) {
+          $('table#items tbody tr').removeClass('info');
+          $item.addClass('info');
+          previewItem($item);
+        }
+      }
+
+      var toggleFilePreviewImageSize = function() {
+        // 'fit' -> 'fit-width' -> 'fit-height' -> 'max' -> 'fit' -> ...
+        if (file_preview_image_size == 'fit') {
+          file_preview_image_size = 'fit-width';
+          $('#file-preview-size-toggle a').html('<i class="fa fa-arrows-h fa-fw"></i>');
+          $('#file-preview-content img').removeClass('fit').addClass('fit-width');
+        } else if (file_preview_image_size == 'fit-width') {
+          file_preview_image_size = 'fit-height';
+          $('#file-preview-size-toggle a').html('<i class="fa fa-arrows-v fa-fw"></i>');
+          $('#file-preview-content img').removeClass('fit-width').addClass('fit-height');
+        } else if (file_preview_image_size == 'fit-height') {
+          file_preview_image_size = 'max';
+          $('#file-preview-size-toggle a').html('<b style="font-size: 14px;line-height: 12px;">1:1</b>');
+          $('#file-preview-content img').removeClass('fit-height').addClass('max');
+        } else {
+          file_preview_image_size = 'fit';
+          $('#file-preview-size-toggle a').html('<i class="fa fa-arrows fa-fw"></i>');
+          $('#file-preview-content img').removeClass('max').addClass('fit');
+        }
+      }
+
+      var windowHeight = function() {
+        return window.innerHeight ? window.innerHeight : $(window).height();
+      }
+
+      var closePreviewModal = function() {
+        if ($('#previewModal').hasClass('in')) {
+          $('#previewModal').modal('toggle');
+          $('#file-preview-content').html('');
+        }
+      }
+
+      $('#previewModal').on('show.bs.modal', function () {
+        is_previewing = true;
+        $('#previewModal .modal-body').unbind('scroll');
+        // $('#previewModal .modal-body').css('overflow-y', 'auto'); 
+        if (window.matchMedia && window.matchMedia('(max-width: 768px)').matches) {
+          $('#previewModal .modal-body').css('height', windowHeight());
+        } else {
+          $('#previewModal .modal-body').css('height', windowHeight() - 15);
+        }
+      });
+
+      $(window).resize(function() {
+        if (is_previewing) {
+          if (window.matchMedia && window.matchMedia('(max-width: 768px)').matches) {
+            $('#previewModal .modal-body').css('height', windowHeight());
+          } else {
+            $('#previewModal .modal-body').css('height', windowHeight() - 15);
+          }
+        }
+      });
+
+      $('#previewModal').on('hide.bs.modal', function () {
+        is_previewing = false;
+        $('#file-preview-content').html('');
+      });
+
+      $(document).on('keydown', function (event) {
+        if (event.shiftKey || event.ctrlKey || event.altKey || event.metaKey) return;
+        // console.log('Keydown:', event.keyCode || event.which);
+        var keycode = event.keyCode || event.which;
+        if (keycode == 37) { // left
+          previewPrevItem();
+        } else if (keycode == 39) { // right
+          previewNextItem();
+        } else if (keycode == 27) { // esc
+          closePreviewModal();
+        } else if (keycode == 83) { // 's' 
+          toggleFilePreviewImageSize();
+        }
+      });
+
+      $('#file-preview-right').on('click', function(event) {
+        event.preventDefault();
+        previewNextItem();
+      });
+
+      $('#file-preview-left').on('click', function(event) {
+        event.preventDefault();
+        previewPrevItem();
+      });
+
+      $('#file-preview-next').on('click', function(event) {
+        event.preventDefault();
+        previewNextItem();
+      });
+
+      $('#file-preview-prev').on('click', function(event) {
+        event.preventDefault();
+        previewPrevItem();
+      });
+
+      $('#file-preview-size-toggle a').on('click', function(event) {
+        event.preventDefault();
+        toggleFilePreviewImageSize();
+      });
+
+      $('#file-preview-close a').on('click', function(event) {
+        event.preventDefault();
+        closePreviewModal();
+      });
+
+      $('table#items tbody tr').each(function() {
+        var $item = $(this);
+
+        if (isImageFile($item) || isVideoFile($item)) {
+          previewable_files_index_map[$item.index()] = previewable_files_count;
+          previewable_files_count++;
+        }
+      });
+
+      $('table#items tbody tr').on('click', function(event) {
+        // event.preventDefault();
+        var $item = $(this);
+
+        if ($item.hasClass('item-folder')) {
+          event.preventDefault();
+
+          var folder_path = $item.attr('data-path');
+          window.location.href = '/?dir=' + folder_path;
+        } else if ($item.hasClass('item-file')) {
+          $('table#items tbody tr').removeClass('info');
+          $item.addClass('info');
+
+          current_index = $item.index();
+          // console.log('Index:', $(this).index());
+
+          previewItem($item);
+        }
+      });
+
+    })
+  </script>
+  </body>
+</html>
