@@ -1,45 +1,37 @@
 #!/usr/bin/env node
 
-var fs = require('fs');
 var path = require('path');
-var util = require('util');
 
 var fse = require('fs-extra');
-var async = require('async');
-var crypto = require('crypto');
 var chalk = require('chalk');
 var bytes = require('bytes');
-var prompt = require('prompt');
-
-var tar = require('tar-fs');
-var tar_stream = require('tar-stream');
-var humanizeDuration = require('humanize-duration');
-
-var log = require('single-line-log').stdout;
 
 var utils = require('./lib/utils');
 var cryptor = require('./lib/cryptor');
 
-var PackFile = require('./lib/pack-file');
+var log = require('single-line-log').stdout;
 
-var VERSION = '0.0.2';
+var cryptoUtils = require('./lib/crypto-utils');
+var CryptoPack = require('./lib/crypto-pack');
+
+var VERSION = '0.0.3';
 
 function printUsage() {
   console.log('cryptopack - version ' + VERSION + ', cryptor - version ' + cryptor.getVersion());
   console.log('');
   console.log('Usage:');
-  console.log('       cryptopack --create,-C [OPTIONS] <input-dir> [output-pack | output-dir]');
-  console.log('       cryptopack --extract,-E [OPTIONS] <input-pack> [output-dir] [entries...]');
-  console.log('       cryptopack --list,-L [OPTIONS] <input-pack> [entries...]');
-  console.log('       cryptopack --index,-I [OPTIONS] <input-pack>');
-  console.log('       cryptopack --browse,-B [OPTIONS] <input-pack>');
-  console.log('       cryptopack --mount,-M [OPTIONS] <input-pack> <mount-point>');
+  console.log('       cryptopack create [OPTIONS] <input-dir> [output-pack | output-dir]');
+  console.log('       cryptopack extract [OPTIONS] <input-pack> [output-dir] [entries...]');
+  console.log('       cryptopack list [OPTIONS] <input-pack> [entries...]');
+  console.log('       cryptopack index [OPTIONS] <input-pack>');
+  console.log('       cryptopack browse [OPTIONS] <input-pack>');
+  console.log('       cryptopack mount [OPTIONS] <input-pack> <mount-point>');
   console.log('');
-  console.log('       cryptopack --config');
-  console.log('       cryptopack --config --set-passphrase');
-  console.log('       cryptopack --config --set-salt');
-  console.log('       cryptopack --config --clear-encryption-key');
-  console.log('       cryptopack --gen-enc-key');
+  console.log('       cryptopack config');
+  console.log('       cryptopack config --set-passphrase');
+  console.log('       cryptopack config --set-salt');
+  console.log('       cryptopack config --clear-encryption-key');
+  console.log('       cryptopack gen-enc-key');
   console.log('');
   console.log('OPTIONS:');
   console.log('');
@@ -47,7 +39,8 @@ function printUsage() {
   console.log('     --verbose                 -v    : verbose');
   console.log('     --progress                      : show progress');
   console.log('');
-  console.log('     --recursive               -r    : scan input directory recursively (default: no)');
+  console.log('     --recursive               -r    : scan input directory recursively (default: yes)');
+  console.log('     --no-recursive            -n    : only scan input directory (not recursively)');
   console.log('');
   console.log('     --default                 -d    : use default encryption key (if exists)');
   console.log('     --enc-key=STRING                : custom encryption key');
@@ -65,22 +58,11 @@ if (process.argv.length < 3 || process.argv.indexOf('--help') >= 0) {
   process.exit();
 }
 
+var command = process.argv[2];
 var argv = [];
-var options = {};
-for (var i = 2; i < process.argv.length; i++) {
-  if (process.argv[i] == '--create' || process.argv[i] == '-C') {
-    options.create = true;
-  } else if (process.argv[i] == '--extract' || process.argv[i] == '-E') {
-    options.extract = true;
-  } else if (process.argv[i] == '--list' || process.argv[i] == '-L') {
-    options.list = true;
-  } else if (process.argv[i] == '--index' || process.argv[i] == '-I') {
-    options.index = true;
-  } else if (process.argv[i] == '--browse' || process.argv[i] == '-B') {
-    options.browse = true;
-  } else if (process.argv[i] == '--mount' || process.argv[i] == '-M') {
-    options.mount = true;
-  } else if (process.argv[i] == '--default' || process.argv[i] == '-d') {
+var options = { recursive: true };
+for (var i = 3; i < process.argv.length; i++) {
+  if (process.argv[i] == '--default' || process.argv[i] == '-d') {
     options.default = true;
   } else if (process.argv[i] == '--ignore-errors') {
     options.ignore_errors = true;
@@ -88,6 +70,8 @@ for (var i = 2; i < process.argv.length; i++) {
     options.ignore_errors = false;
   } else if (process.argv[i] == '--recursive' || process.argv[i] == '-r') {
     options.recursive = true;
+  } else if (process.argv[i] == '--no-recursive' || process.argv[i] == '-n') {
+    options.recursive = false;
   } else if (process.argv[i] == '--force' || process.argv[i] == '-f') {
     options.force = true;
   } else if (process.argv[i] == '--verbose' || process.argv[i] == '-v') {
@@ -164,896 +148,40 @@ if (utils.fileExists(config_file)) {
   config = utils.loadFromJsonFile(config_file);
 }
 
-var generateEncryptionKey = function(passphrase, salt) {
-  return utils.sha512Hash(passphrase, salt || options.salt || config.salt || 'jul11co-crypto-tools');
-}
+var crypto_salt = options.salt || config.salt || 'jul11co-crypto-tools';
 
-var getPromptPassphrase = function(options, callback) {
-  if (typeof options == 'function') {
-    callback = options;
-    options = {};
-  }
-  
-  prompt.message = '';
-  prompt.delimiter = '';
-  prompt.start();
-
-  prompt.get([{
-    name: 'passphrase',
-    message: chalk.magenta('Please enter passphrase:'),
-    hidden: true
-  }], function (err, result) {
-    if (err) {
-      prompt.stop();
-      return callback(err);
-    }
-    var passphrase = result.passphrase;
-
-    if (!options.verify) {
-      prompt.stop();
-      return callback(null, passphrase);
-    }
-
-    prompt.get([{
-      name: 'passphrase',
-      message: chalk.magenta('Please re-enter passphrase:'),
-      hidden: true
-    }], function (err, result) {
-      if (err) {
-        prompt.stop();
-        return callback(err);
-      }
-
-      if (passphrase != result.passphrase) {
-        console.log('Passphrases don\'t match!');
-        prompt.stop();
-        return callback(new Error('Passphrases don\'t match!'));
-      }
-
-      prompt.stop();
-      return callback(null, passphrase);
-    });
-  });
-}
-
-var getPromptSalt = function(options, callback) {
-  if (typeof options == 'function') {
-    callback = options;
-    options = {};
-  }
-  
-  prompt.message = '';
-  prompt.delimiter = '';
-  prompt.start();
-
-  prompt.get([{
-    name: 'salt',
-    message: chalk.magenta('Please enter salt:'),
-    hidden: true
-  }], function (err, result) {
-    if (err) {
-      prompt.stop();
-      return callback(err);
-    }
-    
-    prompt.stop();
-    return callback(null, result.salt);
-  });
-}
-
-/// 
-
-function _pack(INPUT_DIR, OUTPUT_PACK, ENC_KEY, options, done) {
-
-  var pack_file = new PackFile({ path: OUTPUT_PACK });
-
-  // temp dir
-  var TMP_DIR = path.join(config_dir, 'caches', utils.md5Hash(OUTPUT_PACK));
-  options.output_dir = TMP_DIR;
-
-  fse.ensureDirSync(TMP_DIR);
-
-  var output_pack_exists = false;
-  if (utils.fileExists(OUTPUT_PACK)) {
-    output_pack_exists = true;
+var getEncryptionKey = function(opts, callback) {
+  if (typeof opts == 'function') {
+    callback = opts;
+    opts = {};
   }
 
-  var pack_opts = {};
-  if (options.progress) {
-    pack_opts.onEntry = function(entry) {
-      console.log((entry.type || 'File')[0], entry.path, chalk.magenta(bytes(entry.size)));
-    }
-  }
-
-  var onDirEncrypted = function(err, result) {
-    if (!err && result && result.new_files) {
-      if (utils.fileExists(OUTPUT_PACK)) {
-        console.log('Updating existing cryptopack...');
-        pack_file.pack(TMP_DIR, pack_opts, function(err, res) {
-          if (err) {
-            console.log('Updating existing cryptopack... Error!');
-            console.log(err);
-          } else {
-            if (!options.debug) fse.removeSync(TMP_DIR);
-            var stats = utils.getFileStats(OUTPUT_PACK);
-            if (options.progress) console.log('Updating existing cryptopack... OK');
-            console.log('Cryptopack updated:', OUTPUT_PACK, chalk.magenta(stats ? bytes(stats['size']) : ''));
-          }
-        });
-      } else {
-        console.log('Creating new cryptopack...');
-        pack_file.pack(TMP_DIR, pack_opts, function(err, res) {
-          if (err) {
-            console.log('Creating new cryptopack... Error!');
-            console.log(err);
-          } else {
-            if (!options.debug) fse.removeSync(TMP_DIR);
-            var stats = utils.getFileStats(OUTPUT_PACK);
-            if (options.progress) console.log('Creating new cryptopack... OK');
-            console.log('Cryptopack created:', OUTPUT_PACK, chalk.magenta(stats ? bytes(stats['size']) : ''));
-          }
-        });
-      }
-    } else {
-      if (!options.debug) fse.removeSync(TMP_DIR);
-      console.log('Cryptopack not changed.');
-    }
-  }
-
-  var startDirEncrypt = function() {
-    var crypto_index = new cryptor.CryptoIndex(path.join(TMP_DIR, 'INDEX'), ENC_KEY);
-    crypto_index.load(function(err) {
-      if (err) {
-        console.log('Load crypto index error! ');
-        // console.log(err);
-        if (err.message.indexOf('bad decrypt')!=-1) {
-          console.log(chalk.red('Wrong passphrase.'));
-        }
-        process.exit();
-      }
-
-      options.onFileEncrypt = function(original_file, encrypted_file, progress) {
-        log(chalk.magenta('Encrypt:'), progress.current + '/' + progress.total, 
-          path.relative(INPUT_DIR, original_file.path), chalk.magenta(bytes(original_file.size)));
-      }
-      options.onFileEncrypted = function(original_file, encrypted_file, progress) {
-        log(chalk.green('Encrypted:'), progress.current + '/' + progress.total, 
-          path.relative(INPUT_DIR, original_file.path), chalk.magenta(bytes(original_file.size)));
-      }
-      options.onFileEncryptFailed = function(err, original_file, encrypted_file, progress) {
-        log(chalk.red('Encrypt failed:'), progress.current + '/' + progress.total, 
-          original_file.path, chalk.magenta(bytes(original_file.size)), err.message);
-      }
-
-      process.on('SIGINT', function() {
-        console.log("\nCaught interrupt signal");
-        crypto_index.unload(function(err) {
-          if (err) {
-            console.log('Unload crypto index error!');
-            console.log(err);
-          }
-          onDirEncrypted(err, result);
-        })
-      });
-
-      cryptor.encryptDir(INPUT_DIR, TMP_DIR, ENC_KEY, crypto_index, options, function(err, result) {
-        if (err) {
-          console.log('Encrypt folder error!');
-          console.log(err);
-        } else if (result) {
-          console.log('----');
-          console.log('Directory:', result.dirs.length + ' director' + ((result.dirs.length != 1) ? 'ies.': 'y.'));
-          console.log('Total:', result.files.length + ' file' + ((result.files.length != 1) ? 's.': '.'));
-
-          // console.log(result.processed.length + ' file' + ((result.processed.length != 1) ? 's': '') 
-          //   + ' (' + bytes(result.total_size) + ') processed.');
-
-          if (result.encrypted && result.encrypted.length) {
-            console.log('Encrypted:', chalk.magenta(result.encrypted.length 
-              + ' file' + ((result.encrypted.length != 1) ? 's': '') 
-              + ' (' + bytes(result.encrypted_size) + ').'));
-          }
-
-          if (result.errors && result.errors.length) {
-            console.log('----');
-            console.log(chalk.red(errors.length + ' errors.'));
-            result.errors.forEach(function(error) {
-              console.log(error);
-            });
-          }
-        }
-
-        crypto_index.unload(function(err) {
-          if (err) {
-            console.log('Unload crypto index error!');
-            console.log(err);
-          }
-          onDirEncrypted(err, result);
-        })
-      });
-    });
-  }
-
-  // fse.ensureDirSync(INPUT_DIR);
-  fse.emptyDirSync(TMP_DIR);
-
-  if (utils.fileExists(OUTPUT_PACK)) {
-    console.log('Reading existing cryptopack...');
-    pack_file.extractEntries(['INDEX','VERSION','VERIFY'], TMP_DIR, options, function(err, res) {
-      if (err) {
-        console.log('Reading existing cryptopack... Error!');
-        console.log(err);
-      } else {
-        if (options.progress) console.log('Reading existing cryptopack... OK');
-        startDirEncrypt();
-      }
-    });
+  if ((options.default && config.enc_key) || options.enc_key) {
+    return callback(null, options.enc_key || config.enc_key);
+  } else if (options.passphrase) {
+    var ENC_KEY = cryptoUtils.generateEncryptionKey(options.passphrase, crypto_salt);
+    return callback(null, ENC_KEY);
   } else {
-    startDirEncrypt();
-  }
-}
-
-function _extract(INPUT_PACK, OUTPUT_DIR, ENC_KEY, options, done) {
-
-  var pack_file = new PackFile({ path: INPUT_PACK });
-
-  // temp dir
-  var TMP_DIR = path.join(config_dir, 'caches', utils.md5Hash(INPUT_PACK));
-  options.input_dir = TMP_DIR;
-
-  fse.ensureDirSync(OUTPUT_DIR);
-
-  var onDirDecrypted = function() {
-    if (!options.debug) fse.removeSync(TMP_DIR);
-    console.log('Cryptopack unpacked.');
-  }
-
-  var startDirDecrypt = function() {
-    var crypto_index = new cryptor.CryptoIndex(path.join(TMP_DIR, 'INDEX'), ENC_KEY, {read_only: true});
-    // load index
-    crypto_index.load(function(err) {
+    cryptoUtils.getPromptPassphrase(opts, function(err, passphrase) {
       if (err) {
-        console.log('Load crypto index error!');
-        // console.log(err);
-        if (err.message.indexOf('bad decrypt')!=-1) {
-          console.log(chalk.red('Wrong passphrase.'));
-        }
-        process.exit();
-      }
-
-      var entries = [];
-
-      if (options.extract_entries && options.extract_entries.length) {
-        for (var file_id in crypto_index.map()) {
-          var file_info = crypto_index.get(file_id);
-          var will_extract = options.extract_entries.some(function(entry) {
-            return (file_info.name.indexOf(entry) == 0);
-          });
-          if (will_extract) {
-            entries.add(path.join(file_id[0], file_id[1], file_id[2], file_id));
-          }
-        }
-      }
-
-      var extract_opts = {overwrite: true};
-      if (entries.length) {
-        extract_opts.entries = entries;
-      }
-      if (options.progress) {
-        extract_opts.onEntry = function(entry) {
-          console.log((entry.type || 'File')[0], entry.path, chalk.magenta(bytes(entry.size)));
-        }
-      }
-
-      pack_file.extract(TMP_DIR, extract_opts, function(err, result) {
-        if (err) {
-          console.log('Extract files failed!');
-          console.log(err);
-        } else {
-
-          options.onFileDecrypt = function(decrypted_file, encrypted_file, progress) {
-            log(chalk.magenta('Decrypt:'), progress.current + '/' + progress.total, 
-              decrypted_file.path, chalk.magenta(bytes(decrypted_file.size)));
-          }
-          options.onFileDecrypted = function(decrypted_file, encrypted_file, progress) {
-            log(chalk.green('Decrypted:'), progress.current + '/' + progress.total, 
-              decrypted_file.path, chalk.magenta(bytes(decrypted_file.size)));
-          }
-          options.onFileDecryptFailed = function(err, decrypted_file, encrypted_file, progress) {
-            log(chalk.red('Decrypted failed:'), progress.current + '/' + progress.total, 
-              decrypted_file.path, chalk.magenta(bytes(decrypted_file.size)));
-          }
-
-          // decrypt extracted folder
-          cryptor.decryptDir(TMP_DIR, OUTPUT_DIR, ENC_KEY, crypto_index, options, function(err, result) {
-            if (err) {
-              console.log('Decrypt folder error!');
-              console.log(err);
-            } else if (result) {
-              console.log('----');
-              console.log('Total:', result.files.length + ' file' + ((result.files.length != 1) ? 's.': '.'));
-
-              // console.log(result.processed.length + ' file' + ((result.processed.length != 1) ? 's': '') 
-              //   + ' (' + bytes(result.total_size) + ') processed.');
-
-              if (result.decrypted && result.decrypted.length) {
-                console.log('Decrypted:', chalk.magenta(result.decrypted.length 
-                  + ' file' + ((result.decrypted.length != 1) ? 's': '') 
-                  + ' (' + bytes(result.decrypted_size) + ').'));
-              }
-              
-              if (result.errors && result.errors.length) {
-                console.log('----');
-                console.log(chalk.red(result.errors.length + ' errors.'));
-                result.errors.forEach(function(error) {
-                  console.log(error);
-                });
-              }
-            }
-            
-            // unload index
-            crypto_index.unload(function(err) {
-              if (err) {
-                console.log('Unload crypto index error!');
-                console.log(err);
-              }
-              onDirDecrypted();
-            });
-          });
-        }
-      });
-    });
-  }
-
-  // fse.ensureDirSync(TMP_DIR);
-  fse.emptyDirSync(TMP_DIR);
-
-  console.log('Reading cryptopack...');
-  pack_file.extractEntries(['INDEX','VERSION','VERIFY'], TMP_DIR, options, function(err, res) {
-    if (err) {
-      console.log('Reading cryptopack... Error!');
-      console.log(err);
-    } else {
-      if (options.progress) console.log('Reading cryptopack... OK');
-      startDirDecrypt();
-    }
-  });
-}
-
-function _list(INPUT_PACK, ENC_KEY, options, done) {
-
-  var pack_file = new PackFile({ path: INPUT_PACK });
-
-  // temp dir
-  var TMP_DIR = path.join(config_dir, 'caches', utils.md5Hash(INPUT_PACK));
-  options.input_dir = TMP_DIR;
-
-  var startPackList = function() {
-    var crypto_index = new cryptor.CryptoIndex(path.join(TMP_DIR, 'INDEX'), ENC_KEY, {read_only: true});
-    // load index
-    crypto_index.load(function(err) {
-      if (err) {
-        console.log('Load crypto index error!');
-        // console.log(err);
-        if (err.message.indexOf('bad decrypt')!=-1) {
-          console.log(chalk.red('Wrong passphrase.'));
-        }
-        process.exit();
-      }
-      
-      var count = 0;
-      var total_size = 0;
-
-      var largest_size = 0;
-      var largest_file = {};
-
-      // print file list from INDEX
-      for (var file_id in crypto_index.map()) {
-        var file_info = crypto_index.get(file_id);
-        var will_list = true;
-        if (options.list_entries) {
-          will_list = options.list_entries.some(function(entry) {
-            return (file_info.p.indexOf(entry) == 0);
-          });
-        }
-        if (will_list) {
-          count++;
-          console.log(utils.padLeft(''+count, 6)+'.', chalk.magenta(utils.padLeft(bytes(file_info.s), 8)), file_info.p);
-          total_size += file_info.s;
-          if (file_info.s > largest_size) {
-            largest_size = file_info.s;
-            largest_file = {path: file_info.p, size: file_info.s};
-          }
-        }
-      }
-
-      console.log('----');
-      console.log('Total files:', count);
-      console.log('Total size:', bytes(total_size));
-      if (largest_size>0) {
-        console.log('Largest file:', chalk.magenta(bytes(largest_file.size)), largest_file.path);
-      }
-      
-      crypto_index.unload(function(err) {
-        if (err) {
-          console.log('Unload crypto index error!');
-          console.log(err);
-        }
-      });
-    });
-  }
-
-  // fse.ensureDirSync(TMP_DIR);
-  fse.emptyDirSync(TMP_DIR);
-
-  console.log('Reading cryptopack...');
-  pack_file.extractEntries(['INDEX','VERSION','VERIFY'], TMP_DIR, options, function(err, res) {
-    if (err) {
-      console.log('Reading cryptopack... Error!');
-      console.log(err);
-    } else {
-      if (options.progress) console.log('Reading cryptopack... OK');
-      startPackList();
-    }
-  });
-}
-
-function _index(INPUT_PACK, options, done) {
-
-  var pack_file = new PackFile({ path: INPUT_PACK });
-
-  var index_opts = {overwrite: true};
-  if (options.progress) {
-    index_opts.onEntry = function(entry) {
-      console.log((entry.type || 'File')[0], entry.name || entry.path, chalk.magenta(bytes(entry.size)));
-    }
-  }
-
-  if (options.progress) console.log('Generating index...');
-  var start_time = new Date();
-  pack_file.createIndex(index_opts, function(err) {
-    if (err) {
-      console.log('Generating index... Error!');
-      console.log(err);
-      process.exit();
-    }
-    if (options.progress) console.log('Generating index... Done');
-    if (options.progress) console.log('INDEXING TIME:', humanizeDuration(new Date()-start_time));
-
-    var idx_stats = pack_file.getIndexStats();
-    if (idx_stats) {
-      console.log('Entries count:', idx_stats.entriesCount);
-      console.log('Total size:', bytes(idx_stats.totalSize));
-    }
-
-    var idx_file = argv[1] || INPUT_PACK + '.idx';
-    pack_file.saveIndex(idx_file, function(err) {
-      if (err) {
-        console.log('Saving index to file... Error!');
-        console.log(err);
-        process.exit();
-      }
-
-      var stat = utils.getStat(idx_file);
-      if (stat) {
-        console.log('Index file created:', idx_file, bytes(stat['size']));
-      } else {
-        console.log('Cannot generate index file!', idx_file);
-      }
-      process.exit();
-    });
-  });
-}
-
-function _browse(INPUT_PACK, ENC_KEY, options, done) {
-
-  var pack_file = new PackFile({ path: INPUT_PACK });
-
-  // temp dir
-  var TMP_DIR = path.join(config_dir, 'caches', utils.md5Hash(INPUT_PACK));
-  options.input_dir = TMP_DIR;
-
-  var DECRYPTED_TMP_DIR = path.join(TMP_DIR, '_DECRYPTED');
-
-  var crypto_index = null;
-  var browser_opts = {};
-  var entries_map = {};
-
-  process.on('exit', function() {
-    fse.emptyDirSync(DECRYPTED_TMP_DIR);
-    fse.emptyDirSync(TMP_DIR);
-  });
-
-  var getParentDirs = function(_path, opts) {
-    opts = opts || {};
-    var parents = [];
-    var parent = path.dirname(_path);
-    if (opts.trailing_slash) parent = parent + '/';
-    if (parent && parent != '' && parent != '.' && parent != './') {
-      var _parents = getParentDirs(parent, opts);
-      if (_parents.length) parents = parents.concat(_parents);
-      parents.push(parent);
-    }
-    return parents;
-  }
-
-  var loadCryptoIndex = function(callback) {
-    if (!crypto_index) return callback(new Error('Crypto index not specified.'));
-    if (crypto_index.loaded()) return callback();
-    // load index
-    crypto_index.load(function(err) {
-      if (err) {
-        console.log('Load crypto index error!');
-        // console.log(err);
-        if (err.message.indexOf('bad decrypt')!=-1) {
-          console.log(chalk.red('Wrong passphrase.'));
-        }
         return callback(err);
       }
-      callback();
+      var ENC_KEY = cryptoUtils.generateEncryptionKey(passphrase, crypto_salt);
+      return callback(null, ENC_KEY);
     });
   }
-
-  var unloadCryptoIndex = function(callback) {
-    if (!crypto_index || !crypto_index.loaded()) return callback();
-    crypto_index.unload(function(err) {
-      if (err) {
-        console.log('Unload crypto index error!');
-        console.log(err);
-      }
-      callback(err);
-    });
-  }
-
-  var listPack = function(opts, callback) {
-    if (typeof opts == 'function') {
-      callback = opts;
-      opts = {};
-    }
-    if (!crypto_index.loaded()) {
-      return loadCryptoIndex(function(err) {
-        if (err) {
-          return callback(err);
-        }
-        listPack(opts, callback);
-      });
-    }
-
-    var result = {
-      entries: [],
-      totalSize: 0
-    }
-
-    for (var file_id in crypto_index.map()) {
-      var file_info = crypto_index.get(file_id);
-      var entry = {
-        type: 'file',
-        path: file_info.p,
-        size: file_info.s,
-        mode: file_info.m,
-        atime: file_info.at,
-        mtime: file_info.mt,
-        ctime: file_info.ct,
-        birthtime: file_info.bt,
-        encrypted_path: file_info.ep,
-        encrypted_time: file_info.et
-      };
-      entries_map[entry.path] = entry;
-      // add entries for parent dirs (if not added)
-      var dirs = getParentDirs(entry.path);
-      if (dirs.length) {
-        dirs.forEach(function(dir_relpath) {
-          if (!entries_map[dir_relpath]) {
-            entries_map[dir_relpath] = {
-              type: 'directory',
-              path: dir_relpath,
-              size: 0,
-              mtime: entry.mtime
-            }
-          } else if (entries_map[dir_relpath].mtime < entry.ctime) {
-            entries_map[dir_relpath].mtime = entry.ctime;
-          }
-        });
-      }
-    }
-
-    for (var entry_path in entries_map) {
-      var entry = entries_map[entry_path];
-      result.totalSize += entry.size;
-      result.entries.push(entry);
-    }
-
-    unloadCryptoIndex(function() {
-      return callback(null, result);
-    });
-  }
-
-  var extractEntry = function(fpath, output_dir, opts, callback) {
-    if (!entries_map[fpath] || !entries_map[fpath].encrypted_path) {
-      return callback(new Error('Entry not found: ' + fpath));
-    }
-    
-    var entry = entries_map[fpath];
-    var encrypted_file_abs_path = path.join(TMP_DIR, entry.encrypted_path);
-
-    // console.log('extractEntry:', fpath);
-
-    pack_file.extractEntry(entry.encrypted_path, TMP_DIR, function(err) {
-      if (err) return callback(err);
-      if (!utils.fileExists(encrypted_file_abs_path)) {
-        return callback(new Error('File not extracted:', encrypted_file_abs_path));
-      }
-
-      var decrypted_file_abs_path = path.join(DECRYPTED_TMP_DIR, entry.path);
-      fse.ensureDirSync(path.dirname(decrypted_file_abs_path));
-
-      cryptor.decryptFile(encrypted_file_abs_path, decrypted_file_abs_path, ENC_KEY, function(err) {
-        if (err) {
-          console.log('Decrypt file failed!', encrypted_file_abs_path);
-          return callback(err);
-        }
-        if (!utils.fileExists(decrypted_file_abs_path)) {
-          return callback(new Error('File not decrypted:', encrypted_file_abs_path));
-        }
-
-        var entry_mtime = new Date(entry.mtime).getTime()/1000;
-        try {
-          fs.utimesSync(decrypted_file_abs_path, new Date(), entry_mtime);
-        } catch(e) {
-          console.log(e);
-        }
-
-        return callback();
-      });
-    })
-  }
-
-  // fse.ensureDirSync(TMP_DIR);
-  fse.emptyDirSync(TMP_DIR);
-
-  console.log('Reading cryptopack...');
-  pack_file.extractEntries(['INDEX','VERSION','VERIFY'], TMP_DIR, options, function(err, res) {
-    if (err) {
-      console.log('Reading cryptopack... Error!');
-      console.log(err);
-    } else {
-      if (options.progress) console.log('Reading cryptopack... OK');
-
-      crypto_index = new cryptor.CryptoIndex(path.join(TMP_DIR, 'INDEX'), ENC_KEY, {read_only: true});
-      var crypto_source = {
-        path: pack_file.path(),
-        listEntry: listPack,
-        getEntry: extractEntry
-      };
-      require('./lib/crypto-browser')(crypto_source, DECRYPTED_TMP_DIR, browser_opts);
-    }
-  });
-}
-
-function _mount(INPUT_PACK, MOUNT_POINT, ENC_KEY, options, done) {
-
-  var pack_file = new PackFile({ path: INPUT_PACK });
-
-  // temp dir
-  var TMP_DIR = path.join(config_dir, 'caches', utils.md5Hash(INPUT_PACK));
-  options.input_dir = TMP_DIR;
-
-  var DECRYPTED_TMP_DIR = path.join(TMP_DIR, '_DECRYPTED');
-  options.tmp_dir = DECRYPTED_TMP_DIR;
-
-  var crypto_index = null;
-  var entries_map = {};
-
-  process.on('exit', function() {
-    fse.emptyDirSync(DECRYPTED_TMP_DIR);
-    fse.emptyDirSync(TMP_DIR);
-  });
-
-  var getParentDirs = function(_path, opts) {
-    opts = opts || {};
-    var parents = [];
-    var parent = path.dirname(_path);
-    if (opts.trailing_slash) parent = parent + '/';
-    if (parent && parent != '' && parent != '.' && parent != './') {
-      var _parents = getParentDirs(parent, opts);
-      if (_parents.length) parents = parents.concat(_parents);
-      parents.push(parent);
-    }
-    return parents;
-  }
-
-  var loadCryptoIndex = function(callback) {
-    if (!crypto_index) return callback(new Error('Crypto index not specified.'));
-    if (crypto_index.loaded()) return callback();
-    // load index
-    crypto_index.load(function(err) {
-      if (err) {
-        console.log('Load crypto index error!');
-        // console.log(err);
-        if (err.message.indexOf('bad decrypt')!=-1) {
-          console.log(chalk.red('Wrong passphrase.'));
-        }
-        return callback(err);
-      }
-      callback();
-    });
-  }
-
-  var unloadCryptoIndex = function(callback) {
-    if (!crypto_index || !crypto_index.loaded()) return callback();
-    crypto_index.unload(function(err) {
-      if (err) {
-        console.log('Unload crypto index error!');
-        console.log(err);
-      }
-      callback(err);
-    });
-  }
-
-  var listPack = function(opts, callback) {
-    if (typeof opts == 'function') {
-      callback = opts;
-      opts = {};
-    }
-    if (!crypto_index.loaded()) {
-      return loadCryptoIndex(function(err) {
-        if (err) {
-          return callback(err);
-        }
-        listPack(opts, callback);
-      });
-    }
-
-    var result = {
-      entries: [],
-      totalSize: 0
-    }
-
-    for (var file_id in crypto_index.map()) {
-      var file_info = crypto_index.get(file_id);
-      var entry = {
-        type: 'file',
-        path: file_info.p,
-        size: file_info.s,
-        mode: file_info.m,
-        atime: file_info.at,
-        mtime: file_info.mt,
-        ctime: file_info.ct,
-        birthtime: file_info.bt,
-        encrypted_path: file_info.ep,
-        encrypted_time: file_info.et
-      };
-      entries_map[entry.path] = entry;
-      // add entries for parent dirs (if not added)
-      var dirs = getParentDirs(entry.path);
-      if (dirs.length) {
-        dirs.forEach(function(dir_relpath) {
-          if (!entries_map[dir_relpath]) {
-            entries_map[dir_relpath] = {
-              type: 'directory',
-              path: dir_relpath,
-              size: 0,
-              mtime: entry.mtime
-            }
-          } else if (entries_map[dir_relpath].mtime < entry.ctime) {
-            entries_map[dir_relpath].mtime = entry.ctime;
-          }
-        });
-      }
-    }
-
-    for (var entry_path in entries_map) {
-      var entry = entries_map[entry_path];
-      result.totalSize += entry.size;
-      result.entries.push(entry);
-    }
-
-    unloadCryptoIndex(function() {
-      return callback(null, result);
-    });
-  }
-
-  var extractEntry = function(fpath, output_dir, opts, callback) {
-    if (!entries_map[fpath] || !entries_map[fpath].encrypted_path) {
-      return callback(new Error('Entry not found: ' + fpath));
-    }
-    
-    var entry = entries_map[fpath];
-    var encrypted_file_abs_path = path.join(TMP_DIR, entry.encrypted_path);
-
-    // console.log('extractEntry:', fpath);
-
-    pack_file.extractEntry(entry.encrypted_path, TMP_DIR, function(err) {
-      if (err) return callback(err);
-      if (!utils.fileExists(encrypted_file_abs_path)) {
-        return callback(new Error('File not extracted:', encrypted_file_abs_path));
-      }
-
-      var decrypted_file_abs_path = path.join(output_dir, entry.path);
-      fse.ensureDirSync(path.dirname(decrypted_file_abs_path));
-
-      cryptor.decryptFile(encrypted_file_abs_path, decrypted_file_abs_path, ENC_KEY, function(err) {
-        if (err) {
-          console.log('Decrypt file failed!', encrypted_file_abs_path);
-          return callback(err);
-        }
-        if (!utils.fileExists(decrypted_file_abs_path)) {
-          return callback(new Error('File not decrypted:', encrypted_file_abs_path));
-        }
-
-        var entry_mtime = new Date(entry.mtime).getTime()/1000;
-        try {
-          fs.utimesSync(decrypted_file_abs_path, new Date(), entry_mtime);
-        } catch(e) {
-          console.log(e);
-        }
-
-        return callback();
-      });
-    })
-  }
-
-  // fse.ensureDirSync(TMP_DIR);
-  fse.emptyDirSync(TMP_DIR);
-
-  if (!utils.directoryExists(MOUNT_POINT)) {
-    fse.ensureDirSync(MOUNT_POINT);
-  }
-
-  console.log('Reading cryptopack...');
-  pack_file.extractEntries(['INDEX','VERSION','VERIFY'], TMP_DIR, options, function(err, res) {
-    if (err) {
-      console.log('Reading cryptopack... Error!');
-      console.log(err);
-    } else {
-      if (options.progress) console.log('Reading cryptopack... OK');
-
-      crypto_index = new cryptor.CryptoIndex(path.join(TMP_DIR, 'INDEX'), ENC_KEY, {read_only: true});
-      var crypto_source = {
-        path: pack_file.path(),
-        list: listPack,
-        getEntry: extractEntry
-      };
-
-      var mounted = false;
-      var crypto_mount = require('./lib/crypto-mount');
-
-      crypto_mount.mount(crypto_source, MOUNT_POINT, DECRYPTED_TMP_DIR, options, function(err) {
-        if (err) {
-          console.log(err);
-          return done(err);
-        }
-        mounted = true;
-        console.log('Crypto folder mounted on ' + MOUNT_POINT);
-
-        process.on('SIGINT', function () {
-          if (!mounted) return;
-
-          crypto_mount.unmount(crypto_source, MOUNT_POINT,function(err) {
-            if (err) {
-              console.log('Can not unmount: ' + MOUNT_POINT, err);
-              console.log(err);
-            } else {
-              console.log('Unmounted: ' + MOUNT_POINT);
-            }
-          });
-        })
-      });
-    }
-  });
 }
 
 /////
 
-if (options.config) {
+if (command == 'config') {
   if (options.set_passphrase) {
-    getPromptPassphrase({verify: true}, function(err, passphrase) {
+    getEncryptionKey({verify: true}, function(err, enc_key) {
       if (err) {
         // console.log(err);
         console.log('');
         process.exit();
       }
-      var enc_key = generateEncryptionKey(passphrase);
       config.enc_key = enc_key;
       utils.saveToJsonFile(config, config_file);
       console.log('Config saved.');
@@ -1065,7 +193,7 @@ if (options.config) {
     console.log('Config saved.');
     process.exit();
   } else if (options.set_salt) {
-    getPromptSalt(function(err, salt) {
+    cryptoUtils.getPromptSalt(function(err, salt) {
       if (err) {
         // console.log(err);
         console.log('');
@@ -1080,17 +208,15 @@ if (options.config) {
     console.log(config);
     process.exit();
   }
-} else if (options.gen_enc_key) {
-  getPromptPassphrase({verify: true}, function(err, passphrase) {
+} else if (command == 'gen-enc-key') {
+  getEncryptionKey({verify: true}, function(err, enc_key) {
     if (err) {
       // console.log(err);
       process.exit();
     }
-    var ENC_KEY = generateEncryptionKey(passphrase);
-    console.log('Encryption key:', ENC_KEY);
+    console.log('Encryption key:', enc_key);
   });
-} else if (options.create || (argv[0] && utils.directoryExists(argv[0]))) {
-
+} else if (command == 'create') {
   if (argv.length < 1) {
     printUsage();
     process.exit();
@@ -1121,31 +247,95 @@ if (options.config) {
   }
   console.log('Cryptopack: ' + OUTPUT_PACK);
 
-  if ((options.default && config.enc_key) || options.enc_key) {
-    _pack(INPUT_DIR, OUTPUT_PACK, options.enc_key || config.enc_key, options, function(err) {
-      if (err) {
-        console.log(err);
-      }
+  getEncryptionKey({verify: true}, function(err, enc_key) {
+    if (err) {
+      // console.log(err);
+      console.log('');
       process.exit();
-    })
-  } else {
-    getPromptPassphrase({verify: true}, function(err, passphrase) {
+    }
+
+    var cryptopack = new CryptoPack(OUTPUT_PACK, enc_key);
+    
+    options.onFileEncrypt = function(original_file, encrypted_file, progress) {
+      log(chalk.magenta('Encrypt:'), progress.current + '/' + progress.total, 
+        path.relative(INPUT_DIR, original_file.path), chalk.magenta(bytes(original_file.size)));
+    }
+    options.onFileEncrypted = function(original_file, encrypted_file, progress) {
+      log(chalk.green('Encrypted:'), progress.current + '/' + progress.total, 
+        path.relative(INPUT_DIR, original_file.path), chalk.magenta(bytes(original_file.size)));
+    }
+    options.onFileEncryptFailed = function(err, original_file, encrypted_file, progress) {
+      log(chalk.red('Encrypt failed:'), progress.current + '/' + progress.total, 
+        original_file.path, chalk.magenta(bytes(original_file.size)), err.message);
+    }
+
+    cryptopack.load(options, function(err) {
       if (err) {
+        console.log('Load crypto pack failed!');
         // console.log(err);
-        console.log('');
+        console.log(chalk.red(err.message));
         process.exit();
       }
-      var ENC_KEY = generateEncryptionKey(passphrase);
-      _pack(INPUT_DIR, OUTPUT_PACK, ENC_KEY, options, function(err) {
-        if (err) {
-          console.log(err);
-        }
-        process.exit();
-      })
-    });
-  }
-} else if (options.extract) {
 
+      process.on('SIGINT', function() {
+        console.log("\nCaught interrupt signal");
+        cryptopack.unload(function(err) {
+          if (err) {
+            console.log('Unload crypto pack failed!');
+            console.log(err);
+          }
+          process.exit();
+        })
+      });
+
+      cryptopack.pack(INPUT_DIR, options, function(err, result) {
+        if (err) {
+          console.log('Encrypt folder error!');
+          console.log(err);
+        } else if (result) {
+          console.log('----');
+          console.log('Directory:', result.dirs.length + ' director' + ((result.dirs.length != 1) ? 'ies.': 'y.'));
+          console.log('Total:', result.files.length + ' file' + ((result.files.length != 1) ? 's.': '.'));
+
+          // console.log(result.processed.length + ' file' + ((result.processed.length != 1) ? 's': '') 
+          //   + ' (' + bytes(result.total_size) + ') processed.');
+
+          if (result.encrypted && result.encrypted.length) {
+            console.log('Encrypted:', chalk.magenta(result.encrypted.length 
+              + ' file' + ((result.encrypted.length != 1) ? 's': '') 
+              + ' (' + bytes(result.encrypted_size) + ').'));
+          }
+
+          if (result.errors && result.errors.length) {
+            console.log('----');
+            console.log(chalk.red(errors.length + ' errors.'));
+            result.errors.forEach(function(error) {
+              console.log(error);
+            });
+          }
+        }
+        
+        cryptopack.unload(function(err) {
+          if (err) {
+            console.log('Unload crypto pack failed!');
+            console.log(err);
+          } else if (result) {
+            if (result.updated) {
+              console.log('Updating existing cryptopack... OK');
+              console.log('Cryptopack updated:', OUTPUT_PACK, 
+                chalk.magenta(result.stats ? bytes(result.stats['size']) : ''));
+            } else if (result.created) {
+              console.log('Creating new cryptopack... OK');
+              console.log('Cryptopack created:', OUTPUT_PACK, 
+                chalk.magenta(result.stats ? bytes(result.stats['size']) : ''));
+            }
+          }
+          process.exit();
+        })
+      });
+    });
+  });
+} else if (command == 'extract') {
   if (argv.length < 1) {
     printUsage();
     process.exit();
@@ -1178,31 +368,92 @@ if (options.config) {
     options.extract_entries = entries_to_extract;
   }
 
-  if ((options.default && config.enc_key) || options.enc_key) {
-    _extract(INPUT_PACK, OUTPUT_DIR, options.enc_key || config.enc_key, options, function(err) {
-      if (err) {
-        console.log(err);
-      }
-      process.exit();
-    })
-  } else {
-    getPromptPassphrase(function(err, passphrase) {
-      if (err) {
-        // console.log(err);
-        console.log('');
-        process.exit();
-      }
-      var ENC_KEY = generateEncryptionKey(passphrase);
-      _extract(INPUT_PACK, OUTPUT_DIR, ENC_KEY, options, function(err) {
-        if (err) {
-          console.log(err);
-        }
-        process.exit();
-      })
-    });
-  }
-} else if (options.list) {
+  options.read_only = true;
 
+  getEncryptionKey(function(err, enc_key) {
+    if (err) {
+      // console.log(err);
+      console.log('');
+      process.exit();
+    }
+
+    var cryptopack = new CryptoPack(INPUT_PACK, enc_key);
+    
+    if (options.progress) {
+      options.onEntry = function(entry) {
+        console.log((entry.type || 'File')[0], entry.path, chalk.magenta(bytes(entry.size)));
+      }
+    }
+
+    options.onFileDecrypt = function(decrypted_file, encrypted_file, progress) {
+      log(chalk.magenta('Decrypt:'), progress.current + '/' + progress.total, 
+        decrypted_file.path, chalk.magenta(bytes(decrypted_file.size)));
+    }
+    options.onFileDecrypted = function(decrypted_file, encrypted_file, progress) {
+      log(chalk.green('Decrypted:'), progress.current + '/' + progress.total, 
+        decrypted_file.path, chalk.magenta(bytes(decrypted_file.size)));
+    }
+    options.onFileDecryptFailed = function(err, decrypted_file, encrypted_file, progress) {
+      log(chalk.red('Decrypted failed:'), progress.current + '/' + progress.total, 
+        decrypted_file.path, chalk.magenta(bytes(decrypted_file.size)));
+    }
+
+    cryptopack.load(options, function(err) {
+      if (err) {
+        console.log('Load crypto pack failed!');
+        // console.log(err);
+        console.log(chalk.red(err.message));
+        process.exit();
+      }
+
+      process.on('SIGINT', function() {
+        console.log("\nCaught interrupt signal");
+        cryptopack.unload(function(err) {
+          if (err) {
+            console.log('Unload crypto pack failed!');
+            console.log(err);
+          }
+          process.exit();
+        })
+      });
+
+      cryptopack.extract(OUTPUT_DIR, options, function(err, result) {
+        if (err) {
+          console.log('Extract crypto pack failed!');
+          console.log(err);
+        } else if (result) {
+          console.log('----');
+          console.log('Total:', result.files.length + ' file' + ((result.files.length != 1) ? 's.': '.'));
+
+          // console.log(result.processed.length + ' file' + ((result.processed.length != 1) ? 's': '') 
+          //   + ' (' + bytes(result.total_size) + ') processed.');
+
+          if (result.decrypted && result.decrypted.length) {
+            console.log('Decrypted:', chalk.magenta(result.decrypted.length 
+              + ' file' + ((result.decrypted.length != 1) ? 's': '') 
+              + ' (' + bytes(result.decrypted_size) + ').'));
+          }
+          
+          if (result.errors && result.errors.length) {
+            console.log('----');
+            console.log(chalk.red(result.errors.length + ' errors.'));
+            result.errors.forEach(function(error) {
+              console.log(error);
+            });
+          }
+        }
+      
+        cryptopack.unload(function(err) {
+          if (err) {
+            console.log('Unload crypto pack failed!');
+            console.log(err);
+          }
+          process.exit();
+        })
+      });
+    });
+  });
+} else if (command == 'list') {
   if (argv.length < 1) {
     printUsage();
     process.exit();
@@ -1225,31 +476,64 @@ if (options.config) {
     options.list_entries = entries_to_list;
   }
 
-  if ((options.default && config.enc_key) || options.enc_key) {
-    _list(INPUT_PACK, options.enc_key || config.enc_key, options, function(err) {
-      if (err) {
-        console.log(err);
-      }
+  getEncryptionKey(function(err, enc_key) {
+    if (err) {
+      // console.log(err);
+      console.log('');
       process.exit();
-    })
-  } else {
-    getPromptPassphrase(function(err, passphrase) {
+    }
+
+    var cryptopack = new CryptoPack(INPUT_PACK, enc_key);
+
+    cryptopack.load(options, function(err) {
       if (err) {
+        console.log('Load crypto pack failed!');
         // console.log(err);
-        console.log('');
+        console.log(chalk.red(err.message));
         process.exit();
       }
-      var ENC_KEY = generateEncryptionKey(passphrase);
-      _list(INPUT_PACK, ENC_KEY, options, function(err) {
-        if (err) {
-          console.log(err);
-        }
-        process.exit();
-      })
-    });
-  }
-} else if (options.browse) {
 
+      process.on('SIGINT', function() {
+        console.log("\nCaught interrupt signal");
+        cryptopack.unload(function(err) {
+          if (err) {
+            console.log('Unload crypto pack failed!');
+            console.log(err);
+          }
+          process.exit();
+        })
+      });
+
+      options.onFileInfo = function(file_info, index) {
+        console.log(utils.padLeft(''+count, 6)+'.', 
+          chalk.magenta(utils.padLeft(bytes(file_info.s), 8)), file_info.p);
+      }
+
+      cryptopack.list(options, function(err, result) {
+        if (err) {
+          console.log('List files from crypto pack failed!');
+          console.log(err);
+        } if (result) {
+          console.log('----');
+          console.log('Total files:', result.count);
+          console.log('Total size:', bytes(result.total_size));
+
+          if (result.largest_size>0) {
+            console.log('Largest file:', chalk.magenta(bytes(result.largest_file.size)), result.largest_file.path);
+          }
+        }
+
+        cryptopack.unload(function(err) {
+          if (err) {
+            console.log('Unload crypto pack failed!');
+            console.log(err);
+          }
+          process.exit();
+        })
+      });
+    });
+  });
+} else if (command == 'browse') {
   if (argv.length < 1) {
     printUsage();
     process.exit();
@@ -1262,39 +546,68 @@ if (options.config) {
   }
   console.log('Cryptopack: ' + INPUT_PACK);
 
-  if ((options.default && config.enc_key) || options.enc_key) {
-    _browse(INPUT_PACK, options.enc_key || config.enc_key, options, function(err) {
-      if (err) {
-        console.log(err);
-      }
-      process.exit();
-    })
-  } else if (options.passphrase) {
-    var ENC_KEY = generateEncryptionKey(options.passphrase);
-    _browse(INPUT_PACK, ENC_KEY, options, function(err) {
-      if (err) {
-        console.log(err);
-      }
-      process.exit();
-    })
-  } else {
-    getPromptPassphrase(function(err, passphrase) {
-      if (err) {
-        // console.log(err);
-        console.log('');
-        process.exit();
-      }
-      var ENC_KEY = generateEncryptionKey(passphrase);
-      _browse(INPUT_PACK, ENC_KEY, options, function(err) {
-        if (err) {
-          console.log(err);
-        }
-        process.exit();
-      })
-    });
-  }
-} else if (options.mount) {
+  options.read_only = true;
 
+  getEncryptionKey(function(err, enc_key) {
+    if (err) {
+      // console.log(err);
+      console.log('');
+      process.exit();
+    }
+
+    var cryptopack = new CryptoPack(INPUT_PACK, enc_key);
+
+    cryptopack.load(options, function(err) {
+      if (err) {
+        console.log('Load crypto pack failed!');
+        // console.log(err);
+        console.log(chalk.red(err.message));
+        process.exit();
+      }
+
+      process.on('SIGINT', function() {
+        console.log("\nCaught interrupt signal");
+        cryptopack.unload(function(err) {
+          if (err) {
+            console.log('Unload crypto pack failed!');
+            console.log(err);
+          }
+          process.exit();
+        })
+      });
+
+      cryptopack.browse(options, function(err, listen_port) {
+        if (err) {
+          console.log('Browse crypto pack failed!');
+          console.log(err);
+
+          // Unload cryptopack
+          cryptopack.unload(function(err) {
+            if (err) {
+              console.log('Unload crypto pack failed!');
+              console.log(err);
+            }
+            process.exit();
+          })
+        } else {
+          console.log('Crypto pack browser started. Listening on http://localhost:' + listen_port);
+
+          process.on('SIGINT', function () {
+            console.log("\nCaught interrupt signal");
+            // Unload cryptopack
+            cryptopack.unload(function(err) {
+              if (err) {
+                console.log('Unload crypto pack failed!');
+                console.log(err);
+              }
+              process.exit();
+            });
+          });
+        }
+      });
+    });
+  });
+} else if (command == 'mount') {
   if (argv.length < 2) {
     printUsage();
     process.exit();
@@ -1311,36 +624,78 @@ if (options.config) {
   options.mount_point = MOUNT_POINT;
   console.log('Mount point: ' + MOUNT_POINT);
   
-  if ((options.default && config.enc_key) || options.enc_key) {
-    _mount(INPUT_PACK, MOUNT_POINT, options.enc_key || config.enc_key, options, function(err) {
+  options.read_only = true;
+
+  getEncryptionKey(function(err, enc_key) {
+    if (err) {
+      // console.log(err);
+      console.log('');
+      process.exit();
+    }
+
+    var cryptopack = new CryptoPack(INPUT_PACK, enc_key);
+    
+    cryptopack.load(options, function(err) {
       if (err) {
-        console.log(err);
-      }
-    })
-  } else if (options.passphrase) {
-    var ENC_KEY = generateEncryptionKey(options.passphrase);
-    _mount(INPUT_PACK, MOUNT_POINT, ENC_KEY, options, function(err) {
-      if (err) {
-        console.log(err);
-      }
-    })
-  } else {
-    getPromptPassphrase(function(err, passphrase) {
-      if (err) {
+        console.log('Load crypto pack failed!');
         // console.log(err);
-        console.log('');
+        console.log(chalk.red(err.message));
         process.exit();
       }
-      var ENC_KEY = generateEncryptionKey(passphrase);
-      _mount(INPUT_PACK, MOUNT_POINT, ENC_KEY, options, function(err) {
-        if (err) {
-          console.log(err);
-        }
-      })
-    });
-  }
-} else if (options.index) {
 
+      process.on('SIGINT', function() {
+        console.log("\nCaught interrupt signal");
+        cryptopack.unload(function(err) {
+          if (err) {
+            console.log('Unload crypto pack failed!');
+            console.log(err);
+          }
+          process.exit();
+        })
+      });
+
+      cryptopack.mount(MOUNT_POINT, options, function(err, mount_point) {
+        if (err) {
+          console.log('Mount crypto pack failed!');
+          console.log(err);
+
+          // Unload cryptopack
+          cryptopack.unload(function(err) {
+            if (err) {
+              console.log('Unload crypto pack failed!');
+              console.log(err);
+            }
+            process.exit();
+          });
+        } else if (mount_point) {
+          console.log('Crypto pack mounted on ' + mount_point.path);
+
+          process.on('SIGINT', function () {
+            console.log("\nCaught interrupt signal");
+
+            // Unmount cryptopack
+            mount_point.unmount(function(err) {
+              if (err) {
+                console.log('Unmount failed!', mount_point.path)
+              } else {
+                console.log('Unmounted: ' + mount_point.path);
+              }
+
+              // Unload cryptopack
+              cryptopack.unload(function(err) {
+                if (err) {
+                  console.log('Unload crypto pack failed!');
+                  console.log(err);
+                }
+                process.exit();
+              });
+            });
+          });
+        }
+      });
+    });
+  });
+} else if (command == 'index') {
   if (argv.length < 1) {
     printUsage();
     process.exit();
@@ -1352,13 +707,49 @@ if (options.config) {
     process.exit();
   }
   console.log('Cryptopack: ' + INPUT_PACK);
-
-  _index(INPUT_PACK, options, function(err) {
-    if (err) {
-      console.log(err);
+  
+  if (options.progress) {
+    options.onEntry = function(entry) {
+      console.log((entry.type || 'File')[0], entry.name || entry.path, chalk.magenta(bytes(entry.size)));
     }
-    process.exit();
-  })
+  }
+
+  options.index_file = argv[1];
+
+  var cryptopack = new CryptoPack(INPUT_PACK);
+
+  cryptopack.load(options, function(err) {
+    if (err) {
+      console.log('Load crypto pack failed!');
+      // console.log(err);
+      console.log(chalk.red(err.message));
+      process.exit();
+    }
+
+    cryptopack.index(options, function(err, result) {
+      if (err) {
+        console.log(err);
+      } else if (result) {
+        if (result.index_stats) {
+          console.log('Entries count:', result.index_stats.entriesCount);
+          console.log('Total size:', bytes(result.index_stats.totalSize));
+        }
+        if (result.index_file_stats) {
+          console.log('Index file created:', idx_file, bytes(stat['size']));
+        } else {
+          console.log('Cannot generate index file!', idx_file);
+        }
+      }
+
+      cryptopack.unload(function(err) {
+        if (err) {
+          console.log('Unload crypto pack failed!');
+          console.log(err);
+        }
+        process.exit();
+      });
+    });
+  });
 
 } else {
   printUsage();
