@@ -13,7 +13,7 @@ npm install
 npm link
 ```
 
-#### Install FUSE (for `--mount` options)
+#### Install FUSE (for `mount` command)
 
 Ubuntu/Linux
 
