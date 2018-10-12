@@ -7,6 +7,7 @@ var async = require('async');
 var fse = require('fs-extra');
 var chalk = require('chalk');
 var bytes = require('bytes');
+var moment = require('moment');
 
 var log = require('single-line-log').stdout;
 
@@ -27,12 +28,20 @@ function printUsage() {
   console.log('       cryptofolder remove [OPTIONS] <encrypted-dir> [entries...]');
   console.log('       cryptofolder list [OPTIONS] <encrypted-dir>');
   console.log('       cryptofolder browse [OPTIONS] <encrypted-dir>');
-  console.log('       cryptofolder mount [OPTIONS] <encrypted-dir> <mount-point>');
+  console.log('       cryptofolder mount [OPTIONS] <encrypted-dir> <mount-point> [--read-write]');
   console.log('');
-  console.log('       cryptofolder config');
-  console.log('       cryptofolder config --set-passphrase');
+  console.log('       cryptofolder trash:list [OPTIONS] <encrypted-dir>');
+  console.log('       cryptofolder trash:empty [OPTIONS] <encrypted-dir>');
+  console.log('');
+  console.log('       cryptofolder folder:list');
+  console.log('       cryptofolder folder:add <encrypted-dir>');
+  console.log('       cryptofolder folder:remove <encrypted-dir>');
+  console.log('');
+  console.log('       cryptofolder config --show');
   console.log('       cryptofolder config --set-salt');
+  console.log('       cryptofolder config --set-encryption-key');
   console.log('       cryptofolder config --clear-encryption-key');
+  console.log('');
   console.log('       cryptofolder gen-enc-key');
   console.log('');
   console.log('OPTIONS:');
@@ -42,6 +51,7 @@ function printUsage() {
   console.log('');
   console.log('     --default                 -d    : use default encryption key (if exists)');
   console.log('     --enc-key=STRING                : custom encryption key');
+  console.log('     --save-enc-key                  : (ENCRYPT/DECRYPT) save encryption key to config');
   console.log('');
   console.log('     --recursive               -r    : scan input directory recursively (default: yes)');
   console.log('     --no-recursive            -n    : only scan input directory (not recursively)');
@@ -169,44 +179,75 @@ var getEncryptionKey = function(opts, callback) {
     opts = {};
   }
 
+  if (opts.crypto_dir && config.folders && config.folders[utils.md5Hash(opts.crypto_dir)]) {
+    console.log('Use saved encryption key from config:', config_file);
+    var ENC_KEY = config.folders[utils.md5Hash(opts.crypto_dir)].enc_key;
+    return callback(null, ENC_KEY);
+  }
+
   if ((options.default && config.enc_key) || options.enc_key) {
+    console.log('Use default encryption key from config:', config_file);
     return callback(null, options.enc_key || config.enc_key);
   } else if (options.passphrase) {
+    console.log('Use passphrase from arguments');
     var ENC_KEY = cryptoUtils.generateEncryptionKey(options.passphrase, crypto_salt);
     return callback(null, ENC_KEY);
   } else {
-    cryptoUtils.getPromptPassphrase(opts, function(err, passphrase) {
+    cryptoUtils.getInputPassphrase(opts, function(err, passphrase) {
       if (err) {
         return callback(err);
       }
+      // console.log('Passphrase:', passphrase);
       var ENC_KEY = cryptoUtils.generateEncryptionKey(passphrase, crypto_salt);
       return callback(null, ENC_KEY);
     });
   }
 }
 
+var getEncryptionKeyOrDie = function(opts, done) {
+  getEncryptionKey(opts, function(err, enc_key) {
+    if (err) {
+      // console.log(err);
+      console.log('');
+      process.exit();
+    }
+    return done(enc_key);
+  });
+}
+
+var loadCryptoFolderOrDie = function(cryptofolder, options, done) {
+  console.log('Load crypto folder...');
+  cryptofolder.load(options, function(err) {
+    if (err) {
+      console.log('Load crypto folder failed!');
+      // console.log(err);
+      console.log(chalk.red(err.message));
+      process.exit();
+    }
+    console.log('Load crypto folder... Success');
+    return done(err);
+  })
+}
+
+var unloadCryptoFolder = function(cryptofolder, done) {
+  console.log('Unload crypto folder...');
+  cryptofolder.unload(function(err) {
+    if (err) {
+      console.log('Unload crypto folder failed!');
+      // console.log(err);
+      console.log(chalk.red(err.message));
+    } else {
+      console.log("Unloaded.");
+    }
+    return done(err);
+  });
+}
+
 /////
 
 if (command == 'config') {
-  if (options.set_passphrase) {
-    getEncryptionKey({verify: true}, function(err, enc_key) {
-      if (err) {
-        // console.log(err);
-        console.log('');
-        process.exit();
-      }
-      config.enc_key = enc_key;
-      utils.saveToJsonFile(config, config_file);
-      console.log('Config saved.');
-      process.exit();
-    });
-  } else if (options.clear_encryption_key) {
-    delete config.enc_key;    
-    utils.saveToJsonFile(config, config_file);
-    console.log('Config saved.');
-    process.exit();
-  }else if (options.set_salt) {
-    cryptoUtils.getPromptSalt(function(err, salt) {
+  if (options.set_salt) {
+    cryptoUtils.getInputSalt(function(err, salt) {
       if (err) {
         // console.log(err);
         console.log('');
@@ -217,20 +258,118 @@ if (command == 'config') {
       console.log('Config saved.');
       process.exit();
     });
-  } else {
+  } else if (options.set_encryption_key) {
+    getEncryptionKeyOrDie({verify: true}, function(enc_key) {
+      config.enc_key = enc_key;
+      utils.saveToJsonFile(config, config_file);
+      console.log('Config saved.');
+      process.exit();
+    });
+  } else if (options.clear_encryption_key) {
+    delete config.enc_key;    
+    utils.saveToJsonFile(config, config_file);
+    console.log('Config saved.');
+    process.exit();
+  } else if (options.show) {
     console.log(config);
+    process.exit();
+  } else {
+    printUsage();
     process.exit();
   }
 } else if (command == 'gen-enc-key') {
-  getEncryptionKey({verify: true}, function(err, enc_key) {
-    if (err) {
-      // console.log(err);
-      process.exit();
-    }
+  getEncryptionKeyOrDie({verify: true}, function(enc_key) {
     console.log('Encryption key:', enc_key);
     var index_verify_string = cryptor.encryptString('jul11co-crypto-index', enc_key);
     console.log('Index verify string:', index_verify_string);
   });
+} else if (command == 'folder:list') {
+  var folder_list = [];
+  if (config.folders) {
+    for (var folder_id in config.folders) {
+      folder_list.push(config.folders[folder_id]);
+    }
+  }
+
+  if (options.sort_added) {
+    folder_list.sort(function(a,b) {
+      if (a.added_at>b.added_at) return 1;
+      else if (a.added_at<b.added_at) return -1;
+      return 0;
+    });
+  } else {
+    folder_list.sort(function(a,b) {
+      if (a.path>b.path) return 1;
+      else if (a.path<b.path) return -1;
+      return 0;
+    });
+  }
+
+  if (folder_list.length == 0) {
+    console.log('Folders list empty.');
+    process.exit();
+  } else {
+    console.log('Folders:', folder_list.length);
+    folder_list.forEach(function(folder, idx) {
+      console.log(chalk.bold(utils.padLeft(''+(idx+1), 3))+'.', folder.path, chalk.grey('(added ' + moment(folder.added_at).fromNow() + ')'));
+    });
+  }
+} else if (command == 'folder:add') {
+  if (argv.length == 0) {
+    console.log('Missing folder path');
+    process.exit();
+  }
+
+  var folder_path = path.resolve(argv[0]);
+  if (config.folders && config.folders[utils.md5Hash(folder_path)]) {
+    console.log('Already added:', folder_path);
+    process.exit();
+  }
+
+  console.log('Adding folder:', folder_path);
+
+  options.read_only = true;
+
+  getEncryptionKeyOrDie({}, function(enc_key) {
+
+    var cryptofolder = new CryptoFolder(folder_path, enc_key);
+    // Load cryptofolder
+    loadCryptoFolderOrDie(cryptofolder, options, function(err) {
+      // Unload cryptofolder
+      unloadCryptoFolder(cryptofolder, function(err) {
+        config.folders = config.folders || {};
+        config.folders[utils.md5Hash(folder_path)] = {
+          path: folder_path,
+          enc_key: enc_key,
+          added_at: new Date()
+        };
+        console.log('Folder added.');
+
+        utils.saveToJsonFile(config, config_file);
+        console.log('Config saved.');
+        process.exit();
+      });
+    });
+  });
+} else if (command == 'folder:remove') {
+  if (argv.length == 0) {
+    console.log('Missing folder path');
+    process.exit();
+  }
+
+  var folder_path = path.resolve(argv[0]);
+  console.log('Removing folder:', folder_path);
+
+  if (config.folders && config.folders[utils.md5Hash(folder_path)]) {
+    delete config.folders[utils.md5Hash(folder_path)];
+    console.log('Folder removed.');
+    utils.saveToJsonFile(config, config_file);
+    console.log('Config saved.');
+    process.exit();
+  } else {
+    console.log('Folder not found in list.');
+    process.exit();
+  }
 } else if (command == 'encrypt') {
   if (argv.length < 2) {
     printUsage();
@@ -264,12 +403,16 @@ if (command == 'config') {
     options.encrypt_entries = entries_to_encrypt;
   }
 
-  getEncryptionKey({verify: true}, function(err, enc_key) {
-    if (err) {
-      // console.log(err);
-      console.log('');
+  var exit_callbacks = [];
+  process.on('SIGINT', function () {
+    console.log("\nCaught Ctrl^C");
+    // 
+    async.series(exit_callbacks, function(err) {
       process.exit();
-    }
+    });
+  });
+
+  getEncryptionKeyOrDie({verify: true, crypto_dir: OUTPUT_DIR}, function(enc_key) {
 
     var cryptofolder = new CryptoFolder(OUTPUT_DIR, enc_key);
       
@@ -287,23 +430,24 @@ if (command == 'config') {
     }
 
     // Load cryptofolder
-    cryptofolder.load(options, function(err) {
-      if (err) {
-        console.log('Load crypto folder failed!');
-        // console.log(err);
-        console.log(chalk.red(err.message));
-        process.exit();
+    loadCryptoFolderOrDie(cryptofolder, options, function(err) {
+
+      if (options.save_enc_key) {
+        config.folders = config.folders || {};
+        var input_dir_hash = utils.md5Hash(OUTPUT_DIR);
+        if (!config.folders[input_dir_hash]) {
+          config.folders[input_dir_hash] = {
+            path: INPUT_DIR,
+            enc_key: enc_key,
+            added_at: new Date()
+          };
+          utils.saveToJsonFile(config, config_file);
+          console.log('Encryption key saved.');
+        }
       }
 
-      process.on('SIGINT', function() {
-        console.log("\nCaught interrupt signal");
-        cryptofolder.unload(function(err) {
-          if (err) {
-            console.log('Unload crypto folder failed!');
-            console.log(err);
-          }
-          process.exit();
-        });
+      exit_callbacks.push(function(cb) {
+        unloadCryptoFolder(cryptofolder, cb);
       });
 
       // Encrypt files to cryptofolder
@@ -335,11 +479,7 @@ if (command == 'config') {
         }
 
         // Unload cryptofolder
-        cryptofolder.unload(function(err) {
-          if (err) {
-            console.log('Unload crypto folder failed!');
-            console.log(err);
-          }
+        unloadCryptoFolder(cryptofolder, function(err) {
           process.exit();
         });
       });
@@ -380,11 +520,20 @@ if (command == 'config') {
 
   options.read_only = (!options.remove_source_files || options.remove_source_files.length == 0);
 
-  getEncryptionKey(function(err, enc_key) {
-    if (err) {
-      // console.log(err);
-      console.log('');
-      process.exit();
+  getEncryptionKeyOrDie({crypto_dir: INPUT_DIR}, function(enc_key) {
+
+    var input_dir_hash = utils.md5Hash(INPUT_DIR);
+    if (options.save_enc_key) {
+      config.folders = config.folders || {};
+      if (!config.folders[input_dir_hash]) {
+        config.folders[input_dir_hash] = {
+          path: INPUT_DIR,
+          enc_key: enc_key,
+          added_at: new Date()
+        };
+        utils.saveToJsonFile(config, config_file);
+        console.log('Encryption key saved.');
+      }
     }
 
     var cryptofolder = new CryptoFolder(INPUT_DIR, enc_key);
@@ -403,13 +552,7 @@ if (command == 'config') {
     }
 
     // Load cryptofolder
-    cryptofolder.load(options, function(err) {
-      if (err) {
-        console.log('Load crypto folder failed!');
-        // console.log(err);
-        console.log(chalk.red(err.message));
-        process.exit();
-      }
+    loadCryptoFolderOrDie(cryptofolder, options, function(err) {
 
       // Decrypt files from cryptofolder
       cryptofolder.decrypt(OUTPUT_DIR, options, function(err, result) {
@@ -439,11 +582,7 @@ if (command == 'config') {
         }
         
         // Unload cryptofolder
-        cryptofolder.unload(function(err) {
-          if (err) {
-            console.log('Unload crypto folder failed!');
-            console.log(err);
-          }
+        unloadCryptoFolder(cryptofolder, function(err) {
           process.exit();
         });
       });
@@ -478,12 +617,7 @@ if (command == 'config') {
     console.log(' - ' + entry + '*');
   });
 
-  getEncryptionKey(function(err, enc_key) {
-    if (err) {
-      // console.log(err);
-      console.log('');
-      process.exit();
-    }
+  getEncryptionKeyOrDie({crypto_dir: INPUT_DIR}, function(enc_key) {
 
     var cryptofolder = new CryptoFolder(INPUT_DIR, enc_key);
 
@@ -501,13 +635,7 @@ if (command == 'config') {
     }
 
     // Load cryptofolder
-    cryptofolder.load(options, function(err) {
-      if (err) {
-        console.log('Load crypto folder failed!');
-        // console.log(err);
-        console.log(chalk.red(err.message));
-        process.exit();
-      }
+    loadCryptoFolderOrDie(cryptofolder, options, function(err) {
 
       // Remove files in cryptofolder
       cryptofolder.remove(entries_to_remove, options, function(err, result) {
@@ -537,17 +665,12 @@ if (command == 'config') {
         }
 
         // Unload cryptofolder
-        cryptofolder.unload(function(err) {
-          if (err) {
-            console.log('Unload crypto folder failed!');
-            console.log(err);
-          }
+        unloadCryptoFolder(cryptofolder, function(err) {
           process.exit();
         });
       });
     });
   });
-
 } else if (command == 'list') {
   if (argv.length < 1) {
     printUsage();
@@ -574,27 +697,16 @@ if (command == 'config') {
 
   options.read_only = true;
 
-  getEncryptionKey(function(err, enc_key) {
-    if (err) {
-      // console.log(err);
-      console.log('');
-      process.exit();
-    }
+  getEncryptionKeyOrDie({crypto_dir: INPUT_DIR}, function(enc_key) {
 
     var cryptofolder = new CryptoFolder(INPUT_DIR, enc_key);
 
     // Load cryptofolder
-    cryptofolder.load(options, function(err) {
-      if (err) {
-        console.log('Load crypto folder failed!');
-        // console.log(err);
-        console.log(chalk.red(err.message));
-        process.exit();
-      }
+    loadCryptoFolderOrDie(cryptofolder, options, function(err) {
 
       options.onFileInfo = function(file_info, index) {
         console.log(utils.padLeft(''+index, 6)+'.', 
-          chalk.magenta(utils.padLeft(bytes(file_info.s), 8)), file_info.p);
+          chalk.magenta(utils.padLeft(bytes(file_info.size), 8)), file_info.path);
       }
 
       // List files in cryptofolder
@@ -612,11 +724,7 @@ if (command == 'config') {
         }
 
         // Unload cryptofolder
-        cryptofolder.unload(function(err) {
-          if (err) {
-            console.log('Unload crypto folder failed!');
-            console.log(err);
-          }
+        unloadCryptoFolder(cryptofolder, function(err) {
           process.exit();
         });
       });
@@ -647,23 +755,12 @@ if (command == 'config') {
     });
   });
 
-  getEncryptionKey(function(err, enc_key) {
-    if (err) {
-      // console.log(err);
-      console.log('');
-      process.exit();
-    }
+  getEncryptionKeyOrDie({crypto_dir: INPUT_DIR}, function(enc_key) {
 
     var cryptofolder = new CryptoFolder(INPUT_DIR, enc_key);
 
     // Load cryptofolder
-    cryptofolder.load(options, function(err) {
-      if (err) {
-        console.log('Load crypto folder failed!');
-        // console.log(err);
-        console.log(chalk.red(err.message));
-        process.exit();
-      }
+    loadCryptoFolderOrDie(cryptofolder, options, function(err) {
 
       // Start browse cryptofolder
       cryptofolder.browse(options, function(err, listen_port) {
@@ -672,26 +769,15 @@ if (command == 'config') {
           console.log(err);
 
           // Unload cryptofolder
-          cryptofolder.unload(function(err) {
-            if (err) {
-              console.log('Unload crypto folder failed!');
-              console.log(err);
-            }
+          unloadCryptoFolder(cryptofolder, function(err) {
             process.exit();
           });
         } else {
           console.log('Crypto folder browser started. Listening on http://localhost:' + listen_port);
 
           exit_callbacks.push(function (cb) {
-            console.log("\nUnloading...");
             // Unload cryptofolder
-            cryptofolder.unload(function(err) {
-              if (err) {
-                console.log('Unload crypto folder failed!');
-                console.log(err);
-              } else {
-                console.log("Unloaded.");
-              }
+            unloadCryptoFolder(cryptofolder, function(err) {
               cb(err);
             });
           });
@@ -718,33 +804,24 @@ if (command == 'config') {
   console.log('Mount point: ' + MOUNT_POINT);
   
   if (!options.read_write) options.read_only = true;
-  
+
   var exit_callbacks = [];
   process.on('SIGINT', function () {
     console.log("\nCaught Ctrl^C");
     // 
     async.series(exit_callbacks, function(err) {
+      if (err) console.log(err);
+      console.log('Exited.');
       process.exit();
     });
   });
 
-  getEncryptionKey(function(err, enc_key) {
-    if (err) {
-      // console.log(err);
-      console.log('');
-      process.exit();
-    }
+  getEncryptionKeyOrDie({crypto_dir: INPUT_DIR}, function(enc_key) {
 
     var cryptofolder = new CryptoFolder(INPUT_DIR, enc_key);
       
     // Load cryptofolder
-    cryptofolder.load(options, function(err) {
-      if (err) {
-        console.log('Load crypto folder failed!');
-        // console.log(err);
-        console.log(chalk.red(err.message));
-        process.exit();
-      }
+    loadCryptoFolderOrDie(cryptofolder, options, function(err) {
 
       // Mount cryptofolder
       cryptofolder.mount(MOUNT_POINT, options, function(err, mount_point) {
@@ -753,11 +830,7 @@ if (command == 'config') {
           console.log(err);
 
           // Unload cryptofolder
-          cryptofolder.unload(function(err) {
-            if (err) {
-              console.log('Unload crypto folder failed!');
-              console.log(err);
-            }
+          unloadCryptoFolder(cryptofolder, function(err) {
             process.exit();
           });
         } else if (mount_point) {
@@ -776,23 +849,102 @@ if (command == 'config') {
             });
           }
 
-          var unloadFolderOnExit = function(cb) {
-            console.log("Unload cryptofolder...");
+          exit_callbacks.push(function(cb) {
             // Unload cryptofolder
-            cryptofolder.unload(function(err) {
-              if (err) {
-                console.log('Unload crypto folder failed!');
-                console.log(err);
-              } else {
-                console.log("Unload cryptofolder... OK");
-              }
+            unloadCryptoFolder(cryptofolder, function(err) {
               cb();
             });
-          }
-
-          exit_callbacks.push(unloadFolderOnExit);
+          });
           exit_callbacks.push(unMountOnExit);
         }
+      });
+    });
+  });
+} else if (command == 'trash:list') {
+  if (argv.length < 1) {
+    printUsage();
+    process.exit();
+  }
+
+  var INPUT_DIR = path.resolve(argv[0]);
+  if (!utils.directoryExists(INPUT_DIR)) {
+    console.log(chalk.red('Directory not found:'), INPUT_DIR);
+    process.exit();
+  }
+  console.log('Input directory: ' + INPUT_DIR);
+  options.input_dir = INPUT_DIR;
+  
+  options.read_only = true;
+
+  getEncryptionKeyOrDie({crypto_dir: INPUT_DIR}, function(enc_key) {
+
+    var cryptofolder = new CryptoFolder(INPUT_DIR, enc_key);
+
+    // Load cryptofolder
+    loadCryptoFolderOrDie(cryptofolder, options, function(err) {
+
+      options.onFileInfo = function(file_info, index) {
+        console.log(utils.padLeft(''+index, 6)+'.', 
+          chalk.magenta(utils.padLeft(bytes(file_info.size), 8)), file_info.path);
+      }
+
+      // List files in cryptofolder's TRASH
+      cryptofolder.listTrash(options, function(err, result) {
+        if (err) {
+          console.log('List files in crypto folder\'s trash failed!');
+          console.log(err);
+        } else if (result) {
+          console.log('----');
+          console.log('Total files:', result.count);
+          console.log('Total size:', bytes(result.total_size));
+          if (result.largest_size>0) {
+            console.log('Largest file:', chalk.magenta(bytes(result.largest_file.size)), result.largest_file.path);
+          }
+        }
+
+        // Unload cryptofolder
+        unloadCryptoFolder(cryptofolder, function(err) {
+          process.exit();
+        });
+      });
+    });
+  });
+} else if (command == 'trash:empty') {
+  if (argv.length < 1) {
+    printUsage();
+    process.exit();
+  }
+
+  var INPUT_DIR = path.resolve(argv[0]);
+  if (!utils.directoryExists(INPUT_DIR)) {
+    console.log(chalk.red('Directory not found:'), INPUT_DIR);
+    process.exit();
+  }
+  console.log('Input directory: ' + INPUT_DIR);
+  options.input_dir = INPUT_DIR;
+
+  getEncryptionKeyOrDie({crypto_dir: INPUT_DIR}, function(enc_key) {
+
+    var cryptofolder = new CryptoFolder(INPUT_DIR, enc_key);
+
+    // Load cryptofolder
+    loadCryptoFolderOrDie(cryptofolder, options, function(err) {
+
+      // Empty cryptofolder's trash
+      cryptofolder.emptyTrash(options, function(err, result) {
+        if (err) {
+          console.log('Empty crypto folder\'s trash failed!');
+          console.log(err);
+        } else if (result) {
+          console.log('----');
+          console.log('Total:', result.files.length + ' file' + ((result.files.length != 1) ? 's.': '.'));
+          console.log('Total size:', bytes(result.totalSize));
+        }
+
+        // Unload cryptofolder
+        unloadCryptoFolder(cryptofolder, function(err) {
+          process.exit();
+        });
       });
     });
   });
