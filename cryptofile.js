@@ -116,7 +116,7 @@ var getEncryptionKey = function(opts, callback) {
     var ENC_KEY = cryptoUtils.generateEncryptionKey(options.passphrase, crypto_salt);
     return callback(null, ENC_KEY);
   } else {
-    cryptoUtils.getPromptPassphrase(opts, function(err, passphrase) {
+    cryptoUtils.getInputPassphrase(opts, function(err, passphrase) {
       if (err) {
         return callback(err);
       }
@@ -147,7 +147,7 @@ if (command == 'config') {
     console.log('Config saved.');
     process.exit();
   }else if (options.set_salt) {
-    cryptoUtils.getPromptSalt(function(err, salt) {
+    cryptoUtils.getInputSalt(function(err, salt) {
       if (err) {
         // console.log(err);
         console.log('');
