@@ -43,7 +43,8 @@ function printUsage() {
   console.log('     --no-recursive            -n    : only scan input directory (not recursively)');
   console.log('');
   console.log('     --default                 -d    : use default encryption key (if exists)');
-  console.log('     --enc-key=STRING                : custom encryption key');
+  console.log('     --enc-key=STRING                : use custom encryption key');
+  console.log('     --salt=STRING                   : use custom salt');
   console.log('');
   console.log('     --min-size=<NUMBER>[GB,MB,KB]   : scan for files with minimum size (default: not set)');
   console.log('     --max-size=<NUMBER>[GB,MB,KB]   : scan for files with maximum size (default: not set)');
@@ -111,10 +112,6 @@ if (options.version) {
   process.exit();
 }
 
-if (options.salt) {
-  console.log('Custom salt:', options.salt);
-}
-
 // ---
 
 if (options.min_size) {
@@ -156,17 +153,22 @@ var getEncryptionKey = function(opts, callback) {
     opts = {};
   }
 
-  if ((options.default && config.enc_key) || options.enc_key) {
-    return callback(null, options.enc_key || config.enc_key);
+  if (options.default && config.enc_key) {
+    console.log('Use default encryption key from config:', config_file);
+    return callback(null, config.enc_key);
+  } else if (options.enc_key) {
+    console.log('Use encryption key from arguments');
+    return callback(null, options.enc_key);
   } else if (options.passphrase) {
-    var ENC_KEY = cryptoUtils.generateEncryptionKey(options.passphrase, crypto_salt);
+    console.log('Use passphrase from arguments');
+    var ENC_KEY = cryptor.generateEncryptionKey(options.passphrase, crypto_salt);
     return callback(null, ENC_KEY);
   } else {
     cryptoUtils.getInputPassphrase(opts, function(err, passphrase) {
       if (err) {
         return callback(err);
       }
-      var ENC_KEY = cryptoUtils.generateEncryptionKey(passphrase, crypto_salt);
+      var ENC_KEY = cryptor.generateEncryptionKey(passphrase, crypto_salt);
       return callback(null, ENC_KEY);
     });
   }
@@ -308,7 +310,7 @@ if (command == 'config') {
 
           if (result.errors && result.errors.length) {
             console.log('----');
-            console.log(chalk.red(errors.length + ' errors.'));
+            console.log(chalk.red(result.errors.length + ' errors.'));
             result.errors.forEach(function(error) {
               console.log(error);
             });
